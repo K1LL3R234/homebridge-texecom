@@ -1,4 +1,3 @@
-var debug = require("debug")("TexecomAccessory");
 var serialport = require("serialport");
 var zpad = require("zpad");
 var S = require('string');
@@ -78,6 +77,7 @@ TexecomPlatform.prototype = {
                 // Extract the area number that is being updated
                 var updated_area = Number(S(S(data).substring(2, 5)));
                 var status = S(data).substring(1, 2);
+                var user = S(data).substring(5,7);
                 var stateValue;
 
                 switch (String(status)) {
@@ -92,8 +92,19 @@ TexecomPlatform.prototype = {
                         changed = true;
                         break;
                     case "A":
-                        stateValue = Characteristic.SecuritySystemCurrentState.AWAY_ARM;
-                        platform.log("Area " + updated_area + " armed");
+                        //user is for my setup
+                        //my user 17 is full armed (remote)
+                        //all the rest is night armed
+                        if(user=="17")
+                        {
+                            stateValue = Characteristic.SecuritySystemCurrentState.AWAY_ARM;
+                            platform.log("Area " + updated_area + " armed");
+                        }
+                        else
+                        {
+                            stateValue = Characteristic.SecuritySystemCurrentState.NIGHT_ARM;
+                            platform.log("Area " + updated_area + " night armed");
+                        }
                         changed = true;
                         break;
                     default:
