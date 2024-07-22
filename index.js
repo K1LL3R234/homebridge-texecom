@@ -22,8 +22,8 @@ module.exports = function (homebridge) {
     Service = homebridge.hap.Service;
     Characteristic = homebridge.hap.Characteristic;
 
-    homebridge.registerAccessory("homebridge-texecom", "Texecom", TexecomAccessory);
-    homebridge.registerPlatform("homebridge-texecom", "Texecom", TexecomPlatform);
+    homebridge.registerAccessory("homebridge-texecom-full", "Texecom", TexecomAccessory);
+    homebridge.registerPlatform("homebridge-texecom-full", "Texecom", TexecomPlatform);
 }
 
 function TexecomPlatform(log, config) {
@@ -41,6 +41,7 @@ TexecomPlatform.prototype = {
 
     accessories: function (callback) {
         var accessories = [];
+        
         for (var i = 0; i < this.zones.length; i++) {
             var zone = new TexecomAccessory(this.log, this.zones[i], "zone", this.udl, this.serial_device, this.ip_address);
             accessories.push(zone);
