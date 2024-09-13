@@ -12,6 +12,11 @@ const EventEmitter = require('events');
 class ResponseEmitter extends EventEmitter { }
 const responseEmitter = new ResponseEmitter();
 
+const LogUtil = require('./util/logutil');
+
+var areas_armed = [];  // Creates an empty array, which can later grow dynamically
+
+
 var serialPort;
 var connection;
 
@@ -19,7 +24,7 @@ var service_area;
 
 var setByAlarm = false;
 
-var changed=false;
+var changed = false;
 
 module.exports = function (homebridge) {
     Accessory = homebridge.platformAccessory;
@@ -31,7 +36,12 @@ module.exports = function (homebridge) {
 }
 
 function TexecomPlatform(log, config) {
-    this.log = log
+    this.log = new LogUtil(
+        config.debug,
+        config.name,
+        log
+    );
+
     this.serial_device = config["serial_device"];
     this.baud_rate = config["baud_rate"];
     this.zones = config["zones"] || [];
@@ -46,7 +56,7 @@ TexecomPlatform.prototype = {
     accessories: function (callback) {
         var zoneAccessories = [];
         for (var i = 0; i < this.zones.length; i++) {
-            var zone = new TexecomAccessory(this.log, this.zones[i]/*, "zone", this.udl, this.serial_device, this.ip_address*/);
+            var zone = new TexecomAccessory(this.log, this.zones[i]);
             zoneAccessories.push(zone);
         }
         var zoneCount = zoneAccessories.length;
@@ -54,7 +64,7 @@ TexecomPlatform.prototype = {
 
         var areaAccessories = [];
         for (var i = 0; i < this.areas.length; i++) {
-            var area = new TexecomAccessory(this.log, this.areas[i]/*, "area", this.udl, this.serial_device, this.ip_address*/);
+            var area = new TexecomAccessory(this.log, this.areas[i]);
             areaAccessories.push(area);
         }
         var areaCount = areaAccessories.length;
@@ -73,16 +83,41 @@ TexecomPlatform.prototype = {
                 // Is the zone active?
                 var zone_active = S(zone_data).endsWith('1');
 
-                platform.log("Zone update received for zone " + updated_zone + " active: " + zone_active);
+                platform.log.debug("Zone update received for zone " + updated_zone + " active: " + zone_active);
 
                 for (var i = 0; i < zoneCount; i++) {
                     if (zoneAccessories[i].zone_number == updated_zone) {
-                        platform.log("Zone match found, updating zone status in HomeKit to " + zone_active);
+                        platform.log.debug("Zone match found, updating zone status in HomeKit to " + zone_active);
                         zoneAccessories[i].changeHandler(zone_active);
+
+                        if (zone_active) {
+                            for (var a = 0; a < areaCount; a++) {
+                                try {
+                                    areaAccessories[a].zones.forEach(zone => {
+                                        if (zone == zpad(updated_zone, 3) && is_armed(areaAccessories[a].zone_number)) {
+
+                                            // Set the security system state to "ALARM_TRIGGERED"
+                                            stateValue = Characteristic.SecuritySystemCurrentState.ALARM_TRIGGERED;
+                                            platform.log.log("Area " + areaAccessories[a].zone_number + " manual triggered");
+
+                                            // Log the state change
+                                            platform.log.debug("Area match found, updating area status in HomeKit to " + stateValue);
+                                            setByAlarm = true;
+                                            areaAccessories[a].changeHandler(stateValue);
+
+                                        }
+                                    });
+                                }
+                                catch (e) {
+                                    console.error('Error processing zones for area ' + a + ':', e);
+                                }
+                            }
+                        }
                         break;
                     }
                 }
-            } else if (S(data).startsWith('"A') || S(data).startsWith('"D') || S(data).startsWith('"L')) {
+            }
+            else if (S(data).startsWith('"A') || S(data).startsWith('"D') || S(data).startsWith('"L')) {
 
                 // Extract the area number that is being updated
                 var updated_area = Number(S(S(data).substring(2, 5)));
@@ -93,43 +128,59 @@ TexecomPlatform.prototype = {
                 switch (String(status)) {
                     case "L":
                         stateValue = Characteristic.SecuritySystemCurrentState.ALARM_TRIGGERED;
-                        platform.log("Area " + updated_area + " triggered");
+                        platform.log.log("Area " + updated_area + " triggered");
                         changed = true;
                         break;
                     case "D":
                         stateValue = Characteristic.SecuritySystemCurrentState.DISARMED;
-                        platform.log("Area " + updated_area + " disarmed");
+                        platform.log.log("Area " + updated_area + " disarmed");
                         changed = true;
+
+                        areas_armed = areas_armed.filter(value => value !== updated_area);
+
                         break;
                     case "A":
                         //user is for my setup
                         //my user 17 is full armed (remote)
                         //all the rest is night armed
+
+                        // Find the index of the first null or undefined value
+                        const index = areas_armed.findIndex(value => value === null || value === undefined);
+
+                        if (index !== -1) {
+                            // Replace the value at that index
+                            areas_armed[index] = updated_area;
+                        } else {
+                            // If no open slot, append to the end
+                            areas_armed.push(updated_area);
+                        }
+
+
                         if (user == "17") {
                             stateValue = Characteristic.SecuritySystemCurrentState.AWAY_ARM;
-                            platform.log("Area " + updated_area + " armed");
+                            platform.log.log("Area " + updated_area + " armed");
                         }
                         else {
                             stateValue = Characteristic.SecuritySystemCurrentState.NIGHT_ARM;
-                            platform.log("Area " + updated_area + " night armed");
+                            platform.log.log("Area " + updated_area + " night armed");
                         }
                         changed = true;
                         break;
                     default:
-                        platform.log("Unknown status letter " + status);
+                        platform.log.log("Unknown status letter " + status);
                         changed = true;
                         return;
                 }
                 for (var i = 0; i < areaCount; i++) {
                     if (areaAccessories[i].zone_number == updated_area) {
-                        platform.log("Area match found, updating area status in HomeKit to " + stateValue);
+                        platform.log.debug("Area match found, updating area status in HomeKit to " + stateValue);
                         setByAlarm = true;
                         areaAccessories[i].changeHandler(stateValue);
                         break;
                     }
                 }
             } else {
-                platform.log("Unknown string from Texecom: " + S(data));
+                platform.log.debug("Unknown string from Texecom: " + S(data));
             }
         }
 
@@ -142,9 +193,9 @@ TexecomPlatform.prototype = {
             });
 
             serialPort.on("open", function () {
-                platform.log("Serial port opened");
+                platform.log.log("Serial port opened");
                 serialPort.on('data', function (data) {
-                    platform.log("Serial data received: " + data);
+                    platform.log.debug("Serial data received: " + data);
                     responseEmitter.emit('data', data);
                     processData(data);
                 });
@@ -153,63 +204,57 @@ TexecomPlatform.prototype = {
         } else if (this.ip_address) {
             try {
                 connection = net.createConnection(platform.ip_port, platform.ip_address, function () {
-                    platform.log('Connected via IP');
+                    platform.log.log('Connected via IP');
                 });
             } catch (err) {
-                platform.log(err);
+                platform.log.error(err);
             }
             connection.setNoDelay(true);
 
             connection.on('data', function (data) {
-                platform.log("IP data received: " + data);
+                platform.log.debug("IP data received: " + data);
                 responseEmitter.emit('data', data);
                 processData(data);
             });
             connection.on('end', function () {
-                platform.log('IP connection ended');
+                platform.log.log('IP connection ended');
             });
 
             connection.on('close', function () {
-                platform.log('IP connection closed');
+                platform.log.log('IP connection closed');
                 try {
                     connection = net.createConnection(platform.ip_port, platform.ip_address, function () {
-                        platform.log('Re-connected after loss of connection');
+                        platform.log.log('Re-connected after loss of connection');
                     });
                 } catch (err) {
-                    platform.log(err);
+                    platform.log.error(err);
                 }
             });
             this.texecomConnection = connection;
         } else {
-            this.log("Must set either serial_device or ip_address in configuration.");
+            this.log.log("Must set either serial_device or ip_address in configuration.");
         }
     }
 }
 
-function TexecomAccessory(log, config/*, accessoryType, udl, serial_device, ip_address*/) {
+function TexecomAccessory(log, config) {
     this.log = log;
 
     this.zone_number = zpad(config["zone_number"] || config["area_number"], 3);
     this.name = config["name"];
     this.zone_type = config["zone_type"] || config["area_type"] || "motion";
     this.dwell_time = config["dwell"] || 0;
-
-    /*this.accessoryType = accessoryType;
-    this.udl = udl;
-    this.serial_device = serial_device;
-    this.ip_address = ip_address;
-
-    if (accessoryType === "zone") {
-        this.zone_number = zpad(config["zone_number"], 3);
-        this.name = config["name"];
-        this.zone_type = config["zone_type"] || "motion";
-        this.dwell_time = config["dwell"] || 0;
-    } else if (accessoryType === "area") {
-        this.area_number = zpad(config["area_number"], 3);
-        this.name = config["name"];
-        this.zone_type = config["area_type"] || "securitysystem";
-        this.dwell_time = config["dwell"] || 0;
-    }*/
+    try {
+        if (Array.isArray(config["zones"])) {
+            // If it's an array, apply zpad to each element
+            this.zones = config["zones"].map(zone => zpad(zone, 3));
+        } else {
+            // Otherwise, treat it as a single value
+            this.zones = zpad(config["zones"], 3);
+        }
+    } catch (e) {
+        //log.error('Error processing zones: ', e);
+    }
 
     if (config["sn"]) {
         this.sn = config["sn"];
@@ -218,7 +263,7 @@ function TexecomAccessory(log, config/*, accessoryType, udl, serial_device, ip_a
         shasum.update(this.zone_number/* || this.area_number*/);
 
         this.sn = shasum.digest('base64');
-        log('Computed SN ' + this.sn);
+        log.log('Computed SN: ' + this.sn);
     }
 }
 
@@ -239,7 +284,6 @@ TexecomAccessory.prototype = {
             .setCharacteristic(Characteristic.SerialNumber, this.sn);
 
 
-        /*if (this.accessoryType === "zone") {*/
         switch (this.zone_type) {
             case "contact":
                 service = new Service.ContactSensor();
@@ -293,31 +337,29 @@ TexecomAccessory.prototype = {
                     }
                     service.getCharacteristic(Characteristic.SecuritySystemCurrentState).setValue(newState);
 
-                    //changeAction(newState);
-
                     if (targetState != null) {
                         service.getCharacteristic(Characteristic.SecuritySystemTargetState).setValue(targetState);
+                        service.getCharacteristic(Characteristic.SecuritySystemTargetState).updateValue(targetState);
                     }
-                    service.getCharacteristic(Characteristic.SecuritySystemCurrentState).setValue(newState);
-                    me.log("Set target state " + targetState + " and current state " + newState + " in response to notification from alarm");
+                    service.getCharacteristic(Characteristic.SecuritySystemCurrentState).updateValue(newState);
+                    me.log.debug("Set target state " + targetState + " and current state " + newState + " in response to notification from alarm");
                 };
 
                 // we don't know the alarm's state at startup, safer to assume disarmed:
                 changeAction(Characteristic.SecuritySystemCurrentState.DISARMED);
-
                 var area = this;
 
                 service.getCharacteristic(Characteristic.SecuritySystemTargetState)
                     .on('set', function (value, callback) {
                         if (setByAlarm) {
-                            platform.log("Not sending command to alarm for change to state " + value + " because the state change appears to have come from the alarm itself.");
+                            platform.log.debug("Not sending command to alarm for change to state " + value + " because the state change appears to have come from the alarm itself.");
                             setByAlarm = false;
                             return;
                         }
                         if (platform.udl != null) {
                             areaTargetSecurityStateSet(platform, area, service, value, callback);
                         } else {
-                            platform.log("No UDL configured. Add your UDL to enable arm/disarm from HomeKit.");
+                            platform.log.debug("No UDL configured. Add your UDL to enable arm/disarm from HomeKit.");
                             callback(new Error("No UDL configured"));
                         }
                     });
@@ -332,20 +374,10 @@ TexecomAccessory.prototype = {
                 };
                 break;
         }
-        /*} else if (this.accessoryType === "area") {
-            service = new Service.SecuritySystem();
-            changeAction = function (newState) {
-                service.getCharacteristic(Characteristic.SecuritySystemCurrentState)
-                    .setValue(newState);
-                service.getCharacteristic(Characteristic.SecuritySystemTargetState)
-                    .setValue(newState);
-            };
-            changeAction(Characteristic.SecuritySystemCurrentState.DISARMED); // startup default
-        }*/
 
         this.changeHandler = function (status) {
             var newState = status;
-            platform.log("Dwell = " + this.dwell_time);
+            platform.log.debug("Dwell = " + this.dwell_time);
 
             if (!newState && this.dwell_time > 0) {
                 this.dwell_timer = setTimeout(function () { changeAction(newState); }.bind(this), this.dwell_time);
@@ -356,134 +388,12 @@ TexecomAccessory.prototype = {
                 changeAction(newState);
             }
 
-            platform.log("Changing state with changeHandler to " + newState);
+            platform.log.debug("Changing state with changeHandler to " + newState);
 
         }.bind(this);
 
-
-        /*if (this.accessoryType === "area") {
-            service.getCharacteristic(Characteristic.SecuritySystemTargetState)
-                .on('set', function (value, callback) {
-                    if (changed) {
-                        changed = false;
-                    }
-                    else {
-                        service_area = service;
-                        this.setTargetState(parseInt(this.area_number, 10), value, callback);
-                    }
-                }.bind(this));
-        }*/
-
-
         return [informationService, service];
     }
-
-
-
-
-    /*setTargetState: function (areaNumber, value, callback) {
-
-        const hexMapping = {
-            '1': 0x01,
-            '2': 0x02,
-            '3': 0x04,
-            '4': 0x08,
-            '5': 0x10,
-            '6': 0x20,
-            '7': 0x40,
-            '8': 0x80
-        };
-
-
-        this.log("Setting target state for area " + areaNumber + " to " + value);
-
-        var command;
-        switch (value) {
-            case Characteristic.SecuritySystemTargetState.STAY_ARM:
-                command = "\\Y" + String.fromCharCode(parseInt(hexMapping[areaNumber], 16)) + "/"; // Home
-                break;
-            case Characteristic.SecuritySystemTargetState.AWAY_ARM:
-                command = "\\A" + String.fromCharCode(parseInt(hexMapping[areaNumber], 16)) + "/"; // Away arm
-                break;
-            case Characteristic.SecuritySystemTargetState.NIGHT_ARM:
-                command = "\\Y" + String.fromCharCode(parseInt(hexMapping[areaNumber], 16)) + "/"; // Night arm
-                break;
-            case Characteristic.SecuritySystemTargetState.DISARM:
-                command = "\\D" + String.fromCharCode(parseInt(hexMapping[areaNumber], 16)) + "/"; // Disarm
-                break;
-            default:
-                this.log("Unknown target state: " + value);
-                callback(new Error("Unknown target state"));
-                return;
-        }
-
-        //this.updateCurrentState(value);
-
-        if (this.serial_device) {
-            writeCommandAndWaitForOKS("\\W" + this.udl + "/")
-                .then(() => writeCommandAndWaitForOKS(command))
-                .then(() => {
-                    this.updateCurrentState(value);
-                    callback(); // Successful execution
-
-                })
-                .catch((err) => {
-                    callback(err); // Handle errors
-                });
-        } else if (this.ip_address) {
-            writeCommandAndWaitForOK("\\W" + this.udl + "/")
-                .then(() => writeCommandAndWaitForOK(command))
-                .then(() => {
-                    this.updateCurrentState(value);
-                    callback(); // Successful execution
-                })
-                .catch((err) => {
-                    callback(err); // Handle errors
-                });
-        }
-        else {
-
-            this.log("No serial device or IP address configured");
-            callback(new Error("No serial device or IP address configured"));
-        }
-
-    },*/
-
-    /* updateCurrentState: function (newState) {
-         // Update the current state of the accessory here
-         const currentState = this.convertTargetStateToCurrentState(newState);
- 
-         this.log("Updating current state to: " + currentState);
-         if (service_area) {
- 
-             service_area
-                 .getCharacteristic(Characteristic.SecuritySystemCurrentState)
-                 .updateValue(currentState);
- 
-             // Optionally, update the target state to match the current state
-             /*service_area
-             .getCharacteristic(Characteristic.SecuritySystemTargetState)
-             .updateValue(currentState);*/
-    /*} else {
-        this.log("Error: Service not initialized.");
-    }
-},
-
-convertTargetStateToCurrentState: function (targetState) {
-    switch (targetState) {
-        case Characteristic.SecuritySystemTargetState.STAY_ARM:
-            return Characteristic.SecuritySystemCurrentState.STAY_ARM;
-        case Characteristic.SecuritySystemTargetState.AWAY_ARM:
-            return Characteristic.SecuritySystemCurrentState.AWAY_ARM;
-        case Characteristic.SecuritySystemTargetState.NIGHT_ARM:
-            return Characteristic.SecuritySystemCurrentState.NIGHT_ARM;
-        case Characteristic.SecuritySystemTargetState.DISARM:
-            return Characteristic.SecuritySystemCurrentState.DISARMED;
-        default:
-            this.log("Unknown target state: " + targetState);
-            return Characteristic.SecuritySystemCurrentState.DISARMED;
-    }
-}*/
 };
 
 function areaTargetSecurityStateSet(platform, accessory, service, value, callback) {
@@ -515,12 +425,12 @@ function areaTargetSecurityStateSet(platform, accessory, service, value, callbac
             command = "D" + area_number; // Disarm
             break;
         default:
-            this.log("Unknown target state: " + value);
+            this.log.debug("Unknown target state: " + value);
             callback(new Error("Unknown target state"));
             return;
     }
 
-    platform.log("Sending arm/disarm command " + value + " to area " + accessory.zone_number);
+    platform.log.debug("Sending arm/disarm command " + value + " to area " + accessory.zone_number);
 
 
 
@@ -544,17 +454,17 @@ function areaTargetSecurityStateSet(platform, accessory, service, value, callbac
                     currentState = Characteristic.SecuritySystemCurrentState.DISARMED;
                     break;
                 default:
-                    platform.log("Unknown target alarm state " + value);
+                    platform.log.debug("Unknown target alarm state " + value);
                     callback(new Error("Unknown target state"));
                     return;
             }
-            platform.log("Setting current status of area " + accessory.zone_number + " to " + currentState + " because alarm responded OK");
+            platform.log.debug("Setting current status of area " + accessory.zone_number + " to " + currentState + " because alarm responded OK");
             service.getCharacteristic(Characteristic.SecuritySystemCurrentState)
-                .setValue(currentState);
+                .updateValue(currentState);
             callback();
         })
         .catch((err) => {
-            platform.log("Callback with error " + err);
+            platform.log.debug("Callback with error " + err);
             callback(err); // Handle errors
         });
 }
@@ -572,17 +482,17 @@ function writeCommandAndWaitForOK(connection, command, retryCount = 1) {
 
         connection.write("\\" + command + "/", function (err) {
             if (err) {
-                platform.log("Error writing to connection: " + err);
+                platform.log.debug("Error writing to connection: " + err);
                 reject(err);
             } else {
-                platform.log("Command sent: " + command);
+                platform.log.debug("Command sent: " + command);
             }
         });
 
         setTimeout(() => {
             responseEmitter.removeListener('data', handleData);
             if (retryCount > 0) {
-                platform.log("Retrying command due to timeout, retries left: " + retryCount);
+                platform.log.debug("Retrying command due to timeout, retries left: " + retryCount);
                 writeCommandAndWaitForOK(connection, command, retryCount - 1).then(resolve).catch(reject);
             } else {
                 reject(new Error("Timeout after retries"));
@@ -591,48 +501,14 @@ function writeCommandAndWaitForOK(connection, command, retryCount = 1) {
     });
 }
 
+function is_armed(area_number) {
+    let isAreaArmed = false;
 
-/*
-function writeCommandAndWaitForOK(command, callback) {
-    return new Promise((resolve, reject) => {
-        connection.write(command, function (err) {
-            if (err) {
-                platform.log("Error writing to IP connection: " + err);
-                reject(err);
-            } else {
-                platform.log("Command sent to IP connection: " + command);
-            }
-        });
-
-        function handleData(data) {
-            if (data.toString().trim() === 'OK') {
-                responseEmitter.removeListener('data', handleData);
-                resolve();
-            }
+    areas_armed.forEach(function (value) {
+        if (value === area_number) {
+            isAreaArmed = true;
         }
-
-        responseEmitter.on('data', handleData);
     });
+
+    return isAreaArmed;
 }
-
-function writeCommandAndWaitForOKS(command, callback) {
-    return new Promise((resolve, reject) => {
-        serialPort.write(command, function (err) {
-            if (err) {
-                platform.log("Error writing to IP connection: " + err);
-                reject(err);
-            } else {
-                platform.log("Command sent to IP connection: " + command);
-            }
-        });
-
-        function handleData(data) {
-            if (data.toString().trim() === 'OK') {
-                responseEmitter.removeListener('data', handleData);
-                resolve();
-            }
-        }
-
-        responseEmitter.on('data', handleData);
-    });
-}*/
