@@ -109,7 +109,7 @@ TexecomPlatform.prototype = {
                                     });
                                 }
                                 catch (e) {
-                                    console.error('Error processing zones for area ' + a + ':', e);
+                                    console.debug('Error processing zones for area ' + a + '. Please add zones under area.');
                                 }
                             }
                         }
@@ -136,7 +136,7 @@ TexecomPlatform.prototype = {
                         platform.log.log("Area " + updated_area + " disarmed");
                         changed = true;
 
-                        areas_armed = areas_armed.filter(value => value !== updated_area);
+                        areas_armed = areas_armed.filter(value => value !== zpad(updated_area,3));
 
                         break;
                     case "A":
@@ -149,10 +149,10 @@ TexecomPlatform.prototype = {
 
                         if (index !== -1) {
                             // Replace the value at that index
-                            areas_armed[index] = updated_area;
+                            areas_armed[index] = zpad(updated_area,3);
                         } else {
                             // If no open slot, append to the end
-                            areas_armed.push(updated_area);
+                            areas_armed.push(zpad(updated_area,3));
                         }
 
 
@@ -502,13 +502,14 @@ function writeCommandAndWaitForOK(connection, command, retryCount = 1) {
 }
 
 function is_armed(area_number) {
-    let isAreaArmed = false;
+    //let isAreaArmed = false;
 
-    areas_armed.forEach(function (value) {
+    let isAreaArmed = areas_armed.some(value => value === area_number);
+    /*areas_armed.forEach(function (value) {
         if (value === area_number) {
             isAreaArmed = true;
         }
-    });
+    });*/
 
     return isAreaArmed;
 }

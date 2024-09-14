@@ -1,4 +1,4 @@
-# homebridge-texecom
+# homebridge-texecom-full
 
 A plugin for [Homebridge](https://github.com/nfarina/homebridge) that creates HomeKit motion, contact, smoke, or carbon monoxide sensors for alarm zones from a Texecom Premier intruder alarm via a serial connection or COM-IP module.
 
@@ -39,14 +39,28 @@ Example:
                 "zone_number": "15",
                 "zone_type": "contact",
                 "dwell": 1000
+            },
+            {
+                "name": "Back Yard",
+                "zone_number": "19",
+                "zone_type": "motion",
+                "dwell": 1000
             }
         ],
         "areas": [
             {
-                "name": "Texecom Alarm",
+                "name": "Inside",
                 "area_number": "1",
                 "area_type": "securitysystem",
-                "dwell": 0
+                "dwell": 0,
+                "zones":[7,15]
+            },
+            {
+                "name": "Outside",
+                "area_number": "2",
+                "area_type": "securitysystem",
+                "dwell": 0,
+                "zones":[19]
             }
         ]
     }
@@ -69,7 +83,13 @@ For IP connections:
 | Key | Default | Description |
 | --- | --- | --- |
 | `ip_address` | N/A | The IP address of the COM-IP Texecom module |
-| `ip_port` | N/A | The TCP port of the COM-IP Texecom module |
+| `ip_port` | 10001 | The TCP port of the COM-IP Texecom module |
+
+For UDL
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `udl` | 1234 | The UDL code on the panel to be able to arm and disarm alarm |
 
 ### Per-zone Configuration
 
@@ -90,6 +110,7 @@ This plugin is a platform plugin so you must configure each zone from your Texec
 | `area_number` | N/A | The area number from Texecom, usually 1. |
 | `area_type` | `"securitysystem"` | The type of area; only securitysystem is supported. |
 | `dwell` | 0 |  |
+| `zones` | N/A | Add all the zone numbers to the area to be able to trigger alarm and the corresponding area |
 
 ## Configuring Texecom
 
@@ -104,6 +125,10 @@ To configure your COM1 port for the Crestron protocol:
 5. Press "No" to edit the port
 6. Press 8 to jump to "Crestron System"
 7. Press "Yes" to confirm and save.
+8. Scroll until you find UDL.
+9. Press "Yes" to go into it.
+10. Press "No" to edit and change it to disired UDL code.
+11. Press "Yes" to confirm and save.
 
 Press "Menu" repeatedly to exit the engineer menu.
 
@@ -114,3 +139,8 @@ If connecting to a COM-IP, set up the COM-IP as usual and ensure it is working. 
 Alarm systems are complicated and have a lot of features, not all them are suitable for integrating to HomeKit but many of them can be integrated.
 
 * **Panic buttons** - Investigate the possibility of integrating the medical, panic, and fire buttons into HomeKit as buttons/switches to manually trigger those alerts.
+
+
+## Config Schema
+
+If someone can make the config.schema.json interface pretty and improve on it it will be appreciated.
