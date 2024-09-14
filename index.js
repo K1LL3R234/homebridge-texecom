@@ -24,7 +24,6 @@ var service_area;
 
 var setByAlarm = false;
 
-var changed = false;
 
 module.exports = function (homebridge) {
     Accessory = homebridge.platformAccessory;
@@ -129,46 +128,68 @@ TexecomPlatform.prototype = {
                     case "L":
                         stateValue = Characteristic.SecuritySystemCurrentState.ALARM_TRIGGERED;
                         platform.log.log("Area " + updated_area + " triggered");
-                        changed = true;
                         break;
                     case "D":
                         stateValue = Characteristic.SecuritySystemCurrentState.DISARMED;
                         platform.log.log("Area " + updated_area + " disarmed");
-                        changed = true;
-
-                        areas_armed = areas_armed.filter(value => value !== zpad(updated_area,3));
-
+                        areas_armed = areas_armed.filter(value => value !== zpad(updated_area, 3));
                         break;
                     case "A":
                         //user is for my setup
                         //my user 17 is full armed (remote)
+                        //my user on app is 254
                         //all the rest is night armed
-
-                        // Find the index of the first null or undefined value
-                        const index = areas_armed.findIndex(value => value === null || value === undefined);
-
-                        if (index !== -1) {
-                            // Replace the value at that index
-                            areas_armed[index] = zpad(updated_area,3);
-                        } else {
-                            // If no open slot, append to the end
-                            areas_armed.push(zpad(updated_area,3));
-                        }
-
 
                         if (user == "17") {
                             stateValue = Characteristic.SecuritySystemCurrentState.AWAY_ARM;
                             platform.log.log("Area " + updated_area + " armed");
                         }
+                        else if (user == "25" || user == "254") {
+                            // Read the target state
+                            const targetState = areaAccessories[updated_area - 1].target_State;
+
+                            // Map the targetState to the corresponding current state value
+                            switch (targetState) {
+                                case Characteristic.SecuritySystemTargetState.AWAY_ARM:
+                                    stateValue = Characteristic.SecuritySystemCurrentState.AWAY_ARM;
+                                    break;
+                                case Characteristic.SecuritySystemTargetState.STAY_ARM:
+                                    stateValue = Characteristic.SecuritySystemCurrentState.STAY_ARM;
+                                    break;
+                                case Characteristic.SecuritySystemTargetState.NIGHT_ARM:
+                                    stateValue = Characteristic.SecuritySystemCurrentState.NIGHT_ARM;
+                                    break;
+                                case Characteristic.SecuritySystemTargetState.DISARM:
+                                    stateValue = Characteristic.SecuritySystemCurrentState.DISARMED;
+                                    break;
+                                default:
+                                    platform.log.error("Unknown target state: " + targetState);
+                                    return;
+                            }
+
+                            platform.log.log("User 254: Target state is " + targetState + ", updated stateValue is " + stateValue);
+
+                        }
                         else {
                             stateValue = Characteristic.SecuritySystemCurrentState.NIGHT_ARM;
                             platform.log.log("Area " + updated_area + " night armed");
                         }
-                        changed = true;
+
+                        if (stateValue == Characteristic.SecuritySystemCurrentState.AWAY_ARM) {
+                            // Find the index of the first null or undefined value
+                            const index = areas_armed.findIndex(value => value === null || value === undefined);
+
+                            if (index !== -1) {
+                                // Replace the value at that index
+                                areas_armed[index] = zpad(updated_area, 3);
+                            } else {
+                                // If no open slot, append to the end
+                                areas_armed.push(zpad(updated_area, 3));
+                            }
+                        }
                         break;
                     default:
                         platform.log.log("Unknown status letter " + status);
-                        changed = true;
                         return;
                 }
                 for (var i = 0; i < areaCount; i++) {
@@ -244,6 +265,10 @@ function TexecomAccessory(log, config) {
     this.name = config["name"];
     this.zone_type = config["zone_type"] || config["area_type"] || "motion";
     this.dwell_time = config["dwell"] || 0;
+
+    if (config["area_type"] == "securitysystem") {
+        this.target_State = Characteristic.SecuritySystemTargetState.DISARM;
+    }
     try {
         if (Array.isArray(config["zones"])) {
             // If it's an array, apply zpad to each element
@@ -461,6 +486,7 @@ function areaTargetSecurityStateSet(platform, accessory, service, value, callbac
             platform.log.debug("Setting current status of area " + accessory.zone_number + " to " + currentState + " because alarm responded OK");
             service.getCharacteristic(Characteristic.SecuritySystemCurrentState)
                 .updateValue(currentState);
+            accessory.target_State = currentState;
             callback();
         })
         .catch((err) => {

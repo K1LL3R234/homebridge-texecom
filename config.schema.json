@@ -121,6 +121,11 @@
                         "dwell"
                     ]
                 }
+            },
+            "debug":{
+                "type":"boolean",
+                "title":"Debug",
+                "default":false
             }
         },
         "required": true
