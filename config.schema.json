@@ -1,7 +1,8 @@
 {
+    "title": "Texecom",
     "pluginAlias": "Texecom",
     "pluginType": "platform",
-	"headerDisplay": "Official Texecom Homebridge plugin.",
+    "headerDisplay": "Official Texecom Homebridge plugin.",
     "singular": true,
     "schema": {
         "type": "object",
@@ -15,18 +16,34 @@
             },
             "ip_address": {
                 "type": "string",
+                "format": "ipv4",
                 "title": "IP Address"
             },
             "ip_port": {
                 "type": "integer",
+                "default": 10001,
                 "title": "IP Port"
             },
             "serial_device": {
                 "type": "string",
+                "example": "/dev/ttyUSB0",
                 "title": "Serial Device"
             },
             "baud_rate": {
                 "type": "integer",
+                "enum": [
+                    9600,
+                    19200,
+                    38400,
+                    57600,
+                    115200
+                ],
+                "title": "Baud Rate"
+            },
+            "udl": {
+                "type": "integer",
+                "minLength": 4,
+                "maxLength": 6,
                 "title": "Baud Rate"
             },
             "udl": {
@@ -49,25 +66,23 @@
                         },
                         "zone_type": {
                             "type": "string",
-                            "title": "Zone Type",
                             "enum": [
                                 "contact",
-                                "motion",
-                                "smoke",
-                                "carbonmonoxide"
+                                "motion"
                             ],
-                            "default": "motion"
+                            "title": "Zone Type"
                         },
                         "dwell": {
                             "type": "integer",
-                            "title": "Dwell Time",
-                            "default": 1000
+                            "minimum": 0,
+                            "title": "Dwell Time"
                         }
                     },
                     "required": [
                         "name",
                         "zone_number",
-                        "zone_type"
+                        "zone_type",
+                        "dwell"
                     ]
                 }
             },
@@ -87,49 +102,33 @@
                         },
                         "area_type": {
                             "type": "string",
-                            "title": "Area Type",
                             "enum": [
                                 "securitysystem"
                             ],
-                            "default": "securitysystem"
+                            "title": "Area Type"
                         },
                         "dwell": {
                             "type": "integer",
-                            "title": "Dwell Time",
-                            "default": 0
+                            "minimum": 0,
+                            "title": "Dwell Time"
+                        },
+                        "zones": {
+                            "type": "array",
+                            "items": {
+                                "type": "integer"
+                            },
+                            "title": "Zones under Area"
                         }
                     },
                     "required": [
                         "name",
                         "area_number",
-                        "area_type"
+                        "area_type",
+                        "dwell"
                     ]
                 }
             }
         },
-        "oneOf": [
-            {
-                "required": [
-                    "ip_address",
-                    "ip_port"
-                ]
-            },
-            {
-                "required": [
-                    "serial_device",
-                    "baud_rate"
-                ]
-            }
-        ],
-        "required": [
-            "platform",
-            "name",
-            "udl",
-            "zones",
-            "areas"
-        ]
-    },
-    "form": [
-        "*"
-    ]
+        "required": true
+    }
 }

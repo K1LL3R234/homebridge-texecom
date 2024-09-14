@@ -1,0 +1,23 @@
+{
+    /*"configurations": [
+        {
+            "type": "chrome",
+            "name": "localhost:8581",
+            "request": "launch",
+            "program":"${env:APPDATA}\\Roaming\\npm\\node_modules\\homebridge\\bin\\homebridge",
+            "url": "localhost:8581"
+        }
+    ]*/
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch Program",
+            "program": "${env:APPDATA}\\npm\\node_modules\\homebridge\\bin\\homebridge",
+            "request": "launch",
+            "skipFiles": [
+                "<node_internals>//**"
+            ],
+            "type":"pwa-node"
+        }
+    ]
+}
