@@ -44,10 +44,15 @@
                 "type": "integer",
                 "minLength": 4,
                 "maxLength": 6,
+                "title": "Baud Rate"
+            },
+            "udl": {
+                "type": "string",
                 "title": "UDL"
             },
             "zones": {
                 "type": "array",
+                "title": "Zones",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -83,6 +88,7 @@
             },
             "areas": {
                 "type": "array",
+                "title": "Areas",
                 "items": {
                     "type": "object",
                     "properties": {

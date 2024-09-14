@@ -7,6 +7,8 @@
     "type": "git",
     "url": "https://github.com/K1LL3R234/homebridge-texecom"
   },
+  "main": "index.js",
+  "author": "Chris Posthumus",
   "license": "MIT",
   "preferGlobal": true,
   "keywords": [
