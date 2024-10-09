@@ -6,10 +6,24 @@ This change log documents all release versions of homebridge-texecom
 - **FEATURE** - UDL code has been added to ARM, DISARM and STAYARM the system.
 - **FEATURE** - Added Schema will improve later.
 
+### 4.2.3 (2024-10-09)
+
+- **TWEAK** - Trying to get verified by homebridge
+
+### 4.2.2-beta2 (2024-10-09)
+
+- **TWEAK** - Can not install in certain cases. Added post script to check if python is installed.
+- **TEST** - Tested on Homebridge V2
+
+### 4.2.2-beta1 (2024-09-14)
+
+- **TWEAK** - Area triggering reduced to Away Arm only
+            - Not triggering when in Home and evening arm
+
 ### 4.2.1 (2024-09-14)
 
-**FEATURE** - Added arm and disarm for each area
-            - Added zones to each area to be able to trigger an alarm.
+- **FEATURE** - Added arm and disarm for each area
+              - Added zones to each area to be able to trigger an alarm.
 
 ### 1.0.3 (2017-01-28)
 
