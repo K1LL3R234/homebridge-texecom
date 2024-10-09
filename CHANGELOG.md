@@ -1,6 +1,12 @@
 # Change log
 
 This change log documents all release versions of homebridge-texecom
+
+### 4.2.2-beta2 (2024-10-09)
+
+- **TWEAK** - Can not install in certain cases. Added post script to check if python is installed.
+- **TEST** - Tested on Homebridge V2
+
 ### 4.2.2-beta1 (2024-09-14)
 
 - **TWEAK** - Area triggering reduced to Away Arm only
