@@ -1,8 +1,9 @@
 [![npm](https://badgen.net/npm/v/homebridge-texecom-full/latest)](https://www.npmjs.com/package/homebridge-texecom-full)
 [![npm](https://badgen.net/npm/dt/homebridge-texecom-full)](https://www.npmjs.com/package/homebridge-texecom-full)
+[![GitHub last commit](https://badgen.net/github/last-commit/K1LL3R234/homebridge-texecom)](https://github.com/K1LL3R234/homebridge-texecom)
 # homebridge-texecom-full
 
-A plugin for [Homebridge](https://github.com/nfarina/homebridge) that creates HomeKit motion, contact, smoke, or carbon monoxide sensors for alarm zones from a Texecom Premier intruder alarm via a serial connection or COM-IP module. homebridge-texecom was originated by [Kieran Jones](https://github.com/kieranmjones).
+A plugin for [Homebridge](https://github.com/nfarina/homebridge) that creates HomeKit motion, contact, smoke, or carbon monoxide sensors for alarm zones from a Texecom Premier intruder alarm via a serial connection or COM-IP module.
 
 You can receive notifications, which can be set to work only when you're away from home:
 
@@ -134,7 +135,7 @@ To configure your COM1 port for the Crestron protocol:
 
 Press "Menu" repeatedly to exit the engineer menu.
 
-Make sure you program your UDL code in the panel too.
+**Make sure you program your UDL code in the panel too.**
 
 If connecting to a COM-IP, set up the COM-IP as usual and ensure it is working. Then change the configuration for the port the COM-IP is connected to to Crestron as detailed above. This allows the panel to configure the IP address into the module, then changing to Crestron will allow the panel to input/output the correct commands.
 

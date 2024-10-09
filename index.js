@@ -1,4 +1,3 @@
-
 var Service;
 var Characteristic;
 var Accessory;
@@ -41,6 +40,7 @@ function TexecomPlatform(log, config) {
         config.name,
         log
     );
+
     this.serial_device = config["serial_device"];
     this.baud_rate = config["baud_rate"];
     this.zones = config["zones"] || [];
@@ -201,7 +201,7 @@ TexecomPlatform.prototype = {
                     }
                 }
             } else {
-                platform.log("Unknown string from Texecom: " + S(data));
+                platform.log.debug("Unknown string from Texecom: " + S(data));
             }
         }
 
@@ -402,7 +402,7 @@ TexecomAccessory.prototype = {
 
         this.changeHandler = function (status) {
             var newState = status;
-            platform.log("Dwell = " + this.dwell_time);
+            platform.log.debug("Dwell = " + this.dwell_time);
 
             if (!newState && this.dwell_time > 0) {
                 this.dwell_timer = setTimeout(function () { changeAction(newState); }.bind(this), this.dwell_time);
@@ -413,7 +413,7 @@ TexecomAccessory.prototype = {
                 changeAction(newState);
             }
 
-            platform.log("Changing state with changeHandler to " + newState);
+            platform.log.debug("Changing state with changeHandler to " + newState);
 
         }.bind(this);
 

@@ -44,10 +44,6 @@
                 "type": "integer",
                 "minLength": 4,
                 "maxLength": 6,
-                "title": "Baud Rate"
-            },
-            "udl": {
-                "type": "string",
                 "title": "UDL"
             },
             "zones": {
