@@ -2,6 +2,10 @@
 
 This change log documents all release versions of homebridge-texecom
 
+### 4.2.3 (2024-10-09)
+
+- **TWEAK** - Trying to get verified by homebridge
+
 ### 4.2.2-beta2 (2024-10-09)
 
 - **TWEAK** - Can not install in certain cases. Added post script to check if python is installed.
