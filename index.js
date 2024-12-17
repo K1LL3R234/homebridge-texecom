@@ -17,11 +17,6 @@ const LogUtil = require('./util/logutil');
 var areas_armed = [];  // Creates an empty array, which can later grow dynamically
 
 
-var serialPort;
-var connection;
-
-var service_area;
-
 var setByAlarm = false;
 
 
@@ -528,14 +523,7 @@ function writeCommandAndWaitForOK(connection, command, retryCount = 1) {
 }
 
 function is_armed(area_number) {
-    //let isAreaArmed = false;
-
     let isAreaArmed = areas_armed.some(value => value === area_number);
-    /*areas_armed.forEach(function (value) {
-        if (value === area_number) {
-            isAreaArmed = true;
-        }
-    });*/
 
     return isAreaArmed;
 }

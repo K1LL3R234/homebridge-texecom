@@ -1,8 +1,8 @@
 {
   "displayName": "Homebridge Texecom",
   "name": "homebridge-texecom-full",
-  "description": "A plugin for homebridge (https://github.com/nfarina/homebridge) to integrate Texecom Premier Elite alarm systems into HomeKit",
-  "version": "4.2.3",
+  "description": "A plugin for homebridge to integrate Texecom Premier Elite alarm systems into HomeKit",
+  "version": "4.2.5-beta.1",
   "author": {
     "name": "Chris Posthumus",
     "email": "chris.posthumus@gmail.com"
@@ -40,7 +40,7 @@
   ],
   "engines": {
     "homebridge": "^1.6.0 || ^2.0.0-beta.0",
-    "node": "^18.20.4 || ^20.15.1",
+    "node": "^18.20.4 || ^20.15.1 || ^22.12.0",
     "python": ">=3.6.0"
   },
   "homebridge": {
@@ -49,8 +49,8 @@
     ]
   },
   "dependencies": {
-    "debug": "^2.6.9",
-    "serialport": "^8.0.8",
+    "debug": "^4.2.0",
+    "serialport": "^12.0.0",
     "string": "^3.3.3",
     "zpad": "^0.5.0"
   }
