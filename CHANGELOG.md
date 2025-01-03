@@ -3,6 +3,10 @@
 This change log documents all release versions of homebridge-texecom
 
 
+### 4.2.5 (2025-01-03)
+
+- **TWEAK** - Added the version for serial port to work on new node.js
+
 ### 4.2.5-beta.1 (2024-12-17)
 
 - **TWEAK** - Added the version for serial port to work on new node.js
