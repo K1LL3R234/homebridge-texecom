@@ -64,7 +64,10 @@
                             "type": "string",
                             "enum": [
                                 "contact",
-                                "motion"
+                                "motion",
+                                "smoke",
+                                "carbonmonoxide",
+                                "carbondioxide"
                             ],
                             "title": "Zone Type"
                         },
