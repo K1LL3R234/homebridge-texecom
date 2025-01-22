@@ -66,8 +66,7 @@
                                 "contact",
                                 "motion",
                                 "smoke",
-                                "carbonmonoxide",
-                                "carbondioxide"
+                                "carbonmonoxide"
                             ],
                             "title": "Zone Type"
                         },

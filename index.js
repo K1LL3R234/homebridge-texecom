@@ -335,13 +335,6 @@ TexecomAccessory.prototype = {
                         .setValue(newState ? Characteristic.CarbonMonoxideDetected.CO_LEVELS_ABNORMAL : Characteristic.CarbonMonoxideDetected.CO_LEVELS_NORMAL);
                 };
                 break;
-            case "carbondioxide":
-                service = new Service.CarbonDioxideSensor();
-                changeAction = function (newState) {
-                    service.getCharacteristic(Characteristic.CarbonDioxideDetected)
-                        .setValue(newState ? Characteristic.CarbonDioxideDetected.CO_LEVELS_ABNORMAL : Characteristic.CarbonDioxideDetected.CO_LEVELS_NORMAL);
-                };
-                break;
 
             case "securitysystem":
                 service = new Service.SecuritySystem();
