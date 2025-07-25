@@ -13,6 +13,7 @@ class ResponseEmitter extends EventEmitter { }
 const responseEmitter = new ResponseEmitter();
 
 const LogUtil = require('./util/logutil');
+const { platform } = require("os");
 
 var areas_armed = [];  // Creates an empty array, which can later grow dynamically
 
@@ -77,11 +78,11 @@ TexecomPlatform.prototype = {
                 // Is the zone active?
                 var zone_active = S(zone_data).endsWith('1');
 
-                platform.log.debug("Zone update received for zone " + updated_zone + " active: " + zone_active);
+                platform.log.debug(`Zone update received for zone ${updated_zone} active: ${zone_active}`);
 
                 for (var i = 0; i < zoneCount; i++) {
                     if (zoneAccessories[i].zone_number == updated_zone) {
-                        platform.log.debug("Zone match found, updating zone status in HomeKit to " + zone_active);
+                        platform.log.debug(`Zone match found, updating zone status in HomeKit to ${zone_active}`);
                         zoneAccessories[i].changeHandler(zone_active);
 
                         if (zone_active) {
@@ -92,10 +93,10 @@ TexecomPlatform.prototype = {
 
                                             // Set the security system state to "ALARM_TRIGGERED"
                                             stateValue = Characteristic.SecuritySystemCurrentState.ALARM_TRIGGERED;
-                                            platform.log.log("Area " + areaAccessories[a].zone_number + " manual triggered");
+                                            platform.log.log(`Area ${areaAccessories[a].zone_number} manual triggered`);
 
                                             // Log the state change
-                                            platform.log.debug("Area match found, updating area status in HomeKit to " + stateValue);
+                                            platform.log.debug(`Area match found, updating area status in HomeKit to ${stateValue}`);
                                             setByAlarm = true;
                                             areaAccessories[a].changeHandler(stateValue);
 
@@ -103,7 +104,7 @@ TexecomPlatform.prototype = {
                                     });
                                 }
                                 catch (e) {
-                                    console.debug('Error processing zones for area ' + a + '. Please add zones under area.');
+                                    console.debug(`Error processing zones for area ${a} Please add zones under area.`);
                                 }
                             }
                         }
@@ -119,14 +120,16 @@ TexecomPlatform.prototype = {
                 var user = S(data).substring(5, 7);
                 var stateValue;
 
+                let armedByUser = user;
+
                 switch (String(status)) {
                     case "L":
                         stateValue = Characteristic.SecuritySystemCurrentState.ALARM_TRIGGERED;
-                        platform.log.log("Area " + updated_area + " triggered");
+                        platform.log.log(`Area ${updated_area} triggered`);
                         break;
                     case "D":
                         stateValue = Characteristic.SecuritySystemCurrentState.DISARMED;
-                        platform.log.log("Area " + updated_area + " disarmed");
+                        platform.log.log(`Area ${updated_area} disarmed by User ${user}`);
                         areas_armed = areas_armed.filter(value => value !== zpad(updated_area, 3));
                         break;
                     case "A":
@@ -137,7 +140,7 @@ TexecomPlatform.prototype = {
 
                         if (user == "17") {
                             stateValue = Characteristic.SecuritySystemCurrentState.AWAY_ARM;
-                            platform.log.log("Area " + updated_area + " armed");
+                            platform.log.log(`Area ${updated_area} armed (away) by User ${user}`);
                         }
                         else if (user == "25" || user == "254") {
                             // Read the target state
@@ -158,16 +161,16 @@ TexecomPlatform.prototype = {
                                     stateValue = Characteristic.SecuritySystemCurrentState.DISARMED;
                                     break;
                                 default:
-                                    platform.log.error("Unknown target state: " + targetState);
+                                    platform.log.error(`Unknown target state: ${targetState}`);
                                     return;
                             }
 
-                            platform.log.log("User 254: Target state is " + targetState + ", updated stateValue is " + stateValue);
+                            platform.log.log(`User ${user}: Target state is ${targetState}, updated stateValue is ${stateValue}`);
 
                         }
                         else {
                             stateValue = Characteristic.SecuritySystemCurrentState.NIGHT_ARM;
-                            platform.log.log("Area " + updated_area + " night armed");
+                            platform.log.log(`Area ${updated_area} armed (night) by User ${user}`);
                         }
 
                         if (stateValue == Characteristic.SecuritySystemCurrentState.AWAY_ARM) {
@@ -184,19 +187,19 @@ TexecomPlatform.prototype = {
                         }
                         break;
                     default:
-                        platform.log.log("Unknown status letter " + status);
+                        platform.log.log(`Unknown status letter ${status}`);
                         return;
                 }
                 for (var i = 0; i < areaCount; i++) {
                     if (areaAccessories[i].zone_number == updated_area) {
-                        platform.log.debug("Area match found, updating area status in HomeKit to " + stateValue);
+                        platform.log.debug(`Area match found, updating area status in HomeKit to ${stateValue}`);
                         setByAlarm = true;
-                        areaAccessories[i].changeHandler(stateValue);
+                        areaAccessories[i].changeHandler(stateValue, armedByUser);
                         break;
                     }
                 }
             } else {
-                platform.log.debug("Unknown string from Texecom: " + S(data));
+                platform.log.debug(`Unknown string from Texecom: ${S(data)}`);
             }
         }
 
@@ -211,7 +214,7 @@ TexecomPlatform.prototype = {
             serialPort.on("open", function () {
                 platform.log.log("Serial port opened");
                 serialPort.on('data', function (data) {
-                    platform.log.debug("Serial data received: " + data);
+                    platform.log.debug(`Serial data received: ${data}`);
                     responseEmitter.emit('data', data);
                     processData(data);
                 });
@@ -228,23 +231,39 @@ TexecomPlatform.prototype = {
             connection.setNoDelay(true);
 
             connection.on('data', function (data) {
-                platform.log.debug("IP data received: " + data);
+                platform.log.debug(`IP data received: ${data}`);
                 responseEmitter.emit('data', data);
                 processData(data);
             });
+
+            connection.on('timeout', () => {
+                platform.log.error('Connection attempt timed out.');
+                connection.destroy(); // prevent crash
+            });
+
+            connection.on('error', (err) => {
+                platform.log.error(`Socket error: ${err.message}`);
+            });
+
             connection.on('end', function () {
                 platform.log.log('IP connection ended');
             });
 
             connection.on('close', function () {
                 platform.log.log('IP connection closed');
-                try {
-                    connection = net.createConnection(platform.ip_port, platform.ip_address, function () {
-                        platform.log.log('Re-connected after loss of connection');
-                    });
-                } catch (err) {
-                    platform.log.error(err);
-                }
+
+                setTimeout(() => {
+                    platform.log.log('Attempting reconnect...');
+
+                    try {
+                        connection = net.createConnection(platform.ip_port, platform.ip_address, function () {
+                            platform.log.log('Re-connected after loss of connection');
+                        });
+                    } catch (err) {
+                        platform.log.error(err);
+                    }
+                }, 10000);
+
             });
             this.texecomConnection = connection;
         } else {
@@ -283,7 +302,7 @@ function TexecomAccessory(log, config) {
         shasum.update(this.zone_number/* || this.area_number*/);
 
         this.sn = shasum.digest('base64');
-        log.log('Computed SN: ' + this.sn);
+        log.log(`Computed SN: ${this.sn}`);
     }
 }
 
@@ -300,7 +319,7 @@ TexecomAccessory.prototype = {
         informationService
             .setCharacteristic(Characteristic.Name, this.name)
             .setCharacteristic(Characteristic.Manufacturer, "Homebridge")
-            .setCharacteristic(Characteristic.Model, "Texecom " + (this.accessoryType === "zone" ? "Zone" : "Area"))
+            .setCharacteristic(Characteristic.Model, `Texecom ${(this.accessoryType === "zone" ? "Zone" : "Area")}`)
             .setCharacteristic(Characteristic.SerialNumber, this.sn);
 
 
@@ -336,7 +355,8 @@ TexecomAccessory.prototype = {
 
             case "securitysystem":
                 service = new Service.SecuritySystem();
-                changeAction = function (newState) {
+
+                changeAction = function (newState, user = "unknown") {
                     var targetState;
                     switch (newState) {
                         case Characteristic.SecuritySystemCurrentState.NIGHT_ARM:
@@ -362,7 +382,7 @@ TexecomAccessory.prototype = {
                         service.getCharacteristic(Characteristic.SecuritySystemTargetState).updateValue(targetState);
                     }
                     service.getCharacteristic(Characteristic.SecuritySystemCurrentState).updateValue(newState);
-                    me.log.debug("Set target state " + targetState + " and current state " + newState + " in response to notification from alarm");
+                    me.log.debug(`Set target state ${targetState} and current state ${newState} in response to notification from alarm`);
                 };
 
                 // we don't know the alarm's state at startup, safer to assume disarmed:
@@ -372,7 +392,7 @@ TexecomAccessory.prototype = {
                 service.getCharacteristic(Characteristic.SecuritySystemTargetState)
                     .on('set', function (value, callback) {
                         if (setByAlarm) {
-                            platform.log.debug("Not sending command to alarm for change to state " + value + " because the state change appears to have come from the alarm itself.");
+                            platform.log.debug(`Not sending command to alarm for change to state ${value} because the state change appears to have come from the alarm itself.`);
                             setByAlarm = false;
                             return;
                         }
@@ -395,9 +415,9 @@ TexecomAccessory.prototype = {
                 break;
         }
 
-        this.changeHandler = function (status) {
+        this.changeHandler = function (status, user = "unknown") {
             var newState = status;
-            platform.log.debug("Dwell = " + this.dwell_time);
+            platform.log.debug(`Dwell = ${this.dwell_time}`);
 
             if (!newState && this.dwell_time > 0) {
                 this.dwell_timer = setTimeout(function () { changeAction(newState); }.bind(this), this.dwell_time);
@@ -408,7 +428,12 @@ TexecomAccessory.prototype = {
                 changeAction(newState);
             }
 
-            platform.log.debug("Changing state with changeHandler to " + newState);
+            if (user == "unknown") {
+                platform.log.debug(`Changing state with changeHandler to ${newState}`);
+            }
+            else {
+                platform.log.debug(`Changing state with changeHandler to ${newState} by User ${user}`);
+            }
 
         }.bind(this);
 
@@ -436,26 +461,26 @@ function areaTargetSecurityStateSet(platform, accessory, service, value, callbac
     switch (value) {
         case Characteristic.SecuritySystemTargetState.NIGHT_ARM:
         case Characteristic.SecuritySystemTargetState.STAY_ARM:
-            command = "Y" + area_number;  // Home
+            command = `Y${area_number}`;  // Home
             break;
         case Characteristic.SecuritySystemTargetState.AWAY_ARM:
-            command = "A" + area_number; // Away arm
+            command = `A${area_number}`; // Away arm
             break;
         case Characteristic.SecuritySystemTargetState.DISARM:
-            command = "D" + area_number; // Disarm
+            command = `D${area_number}`; // Disarm
             break;
         default:
-            this.log.debug("Unknown target state: " + value);
+            this.log.debug(`Unknown target state: ${value}`);
             callback(new Error("Unknown target state"));
             return;
     }
 
-    platform.log.debug("Sending arm/disarm command " + value + " to area " + accessory.zone_number);
+    platform.log.debug(`Sending arm/disarm command ${value} to area ${accessory.zone_number}`);
 
 
 
 
-    writeCommandAndWaitForOK(platform.texecomConnection, "W" + platform.udl)
+    writeCommandAndWaitForOK(platform.texecomConnection, `W${platform.udl}`)
         .then(() => writeCommandAndWaitForOK(platform.texecomConnection, command, 0))
         .then(() => {
             // OK response from alarm is only indication that the target state has been reached
@@ -474,18 +499,18 @@ function areaTargetSecurityStateSet(platform, accessory, service, value, callbac
                     currentState = Characteristic.SecuritySystemCurrentState.DISARMED;
                     break;
                 default:
-                    platform.log.debug("Unknown target alarm state " + value);
+                    platform.log.debug(`Unknown target alarm state ${value}`);
                     callback(new Error("Unknown target state"));
                     return;
             }
-            platform.log.debug("Setting current status of area " + accessory.zone_number + " to " + currentState + " because alarm responded OK");
+            platform.log.debug(`Setting current status of area ${accessory.zone_number} to ${currentState} because alarm responded OK`);
             service.getCharacteristic(Characteristic.SecuritySystemCurrentState)
                 .updateValue(currentState);
             accessory.target_State = currentState;
             callback();
         })
         .catch((err) => {
-            platform.log.debug("Callback with error " + err);
+            platform.log.debug(`Callback with error ${err}`);
             callback(err); // Handle errors
         });
 }
@@ -501,19 +526,19 @@ function writeCommandAndWaitForOK(connection, command, retryCount = 1) {
 
         responseEmitter.on('data', handleData);
 
-        connection.write("\\" + command + "/", function (err) {
+        connection.write(`\\${command}/`, function (err) {
             if (err) {
-                platform.log.debug("Error writing to connection: " + err);
+                platform.log.debug(`Error writing to connection: ${err}`);
                 reject(err);
             } else {
-                platform.log.debug("Command sent: " + command);
+                platform.log.debug(`Command sent: ${command}`);
             }
         });
 
         setTimeout(() => {
             responseEmitter.removeListener('data', handleData);
             if (retryCount > 0) {
-                platform.log.debug("Retrying command due to timeout, retries left: " + retryCount);
+                platform.log.debug(`Retrying command due to timeout, retries left: ${retryCount}`);
                 writeCommandAndWaitForOK(connection, command, retryCount - 1).then(resolve).catch(reject);
             } else {
                 reject(new Error("Timeout after retries"));
