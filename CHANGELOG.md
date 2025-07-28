@@ -2,6 +2,11 @@
 
 This change log documents all release versions of homebridge-texecom
 
+### 4.2.8 (2025-7-28)
+
+- **TWEAK** - Data conversion issue (Typo)
+- **NEWS** - We are verified!!
+
 ### 4.2.7 (2025-7-28)
 
 - **FIX** - Connection issue
