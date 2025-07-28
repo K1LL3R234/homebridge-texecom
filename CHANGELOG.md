@@ -2,6 +2,15 @@
 
 This change log documents all release versions of homebridge-texecom
 
+### 4.2.7 (2025-7-28)
+
+- **FIX** - Connection issue
+- **NEWS** - We are verified!!
+
+### 4.2.6 (2025-07-25)
+
+- **FIX** - Fixed issues for Verification.
+
 ### 4.2.6-beta.2 (2025-01-22)
 
 - **FIX** - Removed carbondioxide

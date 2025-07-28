@@ -220,7 +220,11 @@ TexecomPlatform.prototype = {
             });
             this.texecomConnection = serialPort;
         } else if (this.ip_address) {
-            try {
+
+            setupConnection();
+
+            
+            /*try {
                 connection = net.createConnection(platform.ip_port, platform.ip_address, function () {
                     platform.log.log('Connected via IP');
                 });
@@ -234,6 +238,13 @@ TexecomPlatform.prototype = {
                 responseEmitter.emit('data', data);
                 processData(data);
             });
+
+
+            connection.on('error', function (err) {
+                platform.log.error(`IP connection error: ${err}`);
+
+            });
+
             connection.on('end', function () {
                 platform.log.log('IP connection ended');
             });
@@ -248,11 +259,47 @@ TexecomPlatform.prototype = {
                     platform.log.error(err);
                 }
             });
-            this.texecomConnection = connection;
+            this.texecomConnection = connection;*/
         } else {
             this.log.log("Must set either serial_device or ip_address in configuration.");
         }
     }
+}
+
+function setupConnection() {
+    platform.log.log('Attempting connection to Texecom...');
+
+    connection = net.createConnection(platform.ip_port, platform.ip_address);
+
+    connection.setNoDelay(true);
+
+    connection.on('connect', () => {
+        platform.log.log('Connected via IP');
+    });
+
+    connection.on('data', function (data) {
+        platform.log.debug(`IP data received: ${data}`);
+        responseEmitter.emit('data', data);
+        processData(data);
+    });
+
+    connection.on('error', (err) => {
+        platform.log.error('IP connection error:', err.message);
+        // We'll reconnect on 'close'
+    });
+
+    connection.on('close', () => {
+        platform.log.error('IP connection closed. Will attempt to reconnect in 10s.');
+        setTimeout(() => {
+            setupConnection();  // try again
+        }, 10000);
+    });
+
+    connection.on('end', () => {
+        platform.log.log('IP connection ended');
+    });
+
+    platform.texecomConnection = connection;
 }
 
 function TexecomAccessory(log, config) {
