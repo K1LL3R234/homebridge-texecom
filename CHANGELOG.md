@@ -2,6 +2,15 @@
 
 This change log documents all release versions of homebridge-texecom
 
+### 4.3.0 (2026-05-23)
+
+- **FIX** - Homebridge v2 compatibility: updated to new platform API with `didFinishLaunching` and `configureAccessory`
+- **FIX** - Replaced deprecated `on('set', callback)` characteristic handler with `onSet` returning a Promise
+- **FIX** - UUID collision between zones and areas sharing the same zone number
+- **FIX** - All alarm-driven state updates now use `updateValue` instead of `setValue` to prevent feedback loops
+- **FIX** - SerialPort v12 compatibility: `baudRate` (camelCase) and `@serialport/parser-readline` pipe parser
+- **FIX** - Removed erroneous `registerAccessory` call alongside `registerPlatform`
+
 ### 4.2.8 (2025-7-28)
 
 - **TWEAK** - Data conversion issue (Typo)
@@ -57,7 +66,7 @@ This change log documents all release versions of homebridge-texecom
 - **FIX** - Zone matching did not work at all in previous release.
 - **FEATURE** - A dwell time is now configureable for each zone before activation is cleared.
 - **FIX** - Breaks added to zone searching for added performance.
- 
+
 ### 1.0.2 (2017-01-24)
 
 - **TWEAK** - Zone matching made much more efficient for added improvement.
