@@ -612,23 +612,23 @@ function areaTargetSecurityStateSet(platform, accessory, service, value, callbac
 // ─── Command writer ───────────────────────────────────────────────────────────
 function writeCommandAndWaitForOK(connection, command, retryCount = 1) {
     return new Promise((resolve, reject) => {
+        function settle(fn, arg) {
+            clearTimeout(timer);
+            responseEmitter.removeListener('data', handleData);
+            fn(arg);
+        }
+
         function handleData(data) {
             if (data.toString().trim() === 'OK') {
-                responseEmitter.removeListener('data', handleData);
-                resolve();
+                settle(resolve);
             }
         }
 
         responseEmitter.on('data', handleData);
 
-        connection.write(`\\${command}/`, function (err) {
-            if (err) {
-                responseEmitter.removeListener('data', handleData);
-                reject(err);
-            }
-        });
-
-        setTimeout(() => {
+        // Cleared as soon as the panel answers. Left running, it sends a
+        // command the panel has already acknowledged a second time.
+        const timer = setTimeout(() => {
             responseEmitter.removeListener('data', handleData);
             if (retryCount > 0) {
                 writeCommandAndWaitForOK(connection, command, retryCount - 1)
@@ -637,6 +637,12 @@ function writeCommandAndWaitForOK(connection, command, retryCount = 1) {
                 reject(new Error("Timeout after retries"));
             }
         }, 2000);
+
+        connection.write(`\\${command}/`, function (err) {
+            if (err) {
+                settle(reject, err);
+            }
+        });
     });
 }
 

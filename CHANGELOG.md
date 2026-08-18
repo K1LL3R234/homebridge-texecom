@@ -11,6 +11,7 @@ This change log documents all release versions of homebridge-texecom
 - **FIX** - A full arm no longer changes to Night in the Home app a minute later (#25). The user numbers that decide how an arm is reported are configurable via `remote_users`, `app_users` and `default_arm_state` instead of being fixed in code, and an arm started from HomeKit now reports the state that was actually asked for.
 - **FIX** - User numbers over 99 are no longer truncated when reading area messages from the panel.
 - **FIX** - Areas are matched by area number rather than by their position in the config.
+- **FIX** - The retry timer was never cleared once a command succeeded, so every arm or disarm sent a second UDL login to the panel two seconds later.
 - **TWEAK** - `engines.homebridge` widened back to `^1.6.0 || ^2.0.0`, 4.3.0 refused to run on Homebridge 1.x.
 - **TWEAK** - Removed the unused `crypto-js` dependency.
 
