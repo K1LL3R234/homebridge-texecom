@@ -1,5 +1,4 @@
 var debug = require("debug")("TexecomAccessory");
-var serialport = require("serialport");
 var zpad = require("zpad");
 var S = require('string');
 var crypto = require("crypto");
@@ -11,12 +10,16 @@ const responseEmitter = new ResponseEmitter();
 
 const LogUtil = require('./util/logutil');
 
-var areas_armed = [];
-var setByAlarm = false;
+// Must match the "name" in package.json and the platform name registered below,
+// both are used to register accessories against the Homebridge accessory cache.
+const PLUGIN_NAME = "homebridge-texecom-full";
+const PLATFORM_NAME = "Texecom";
 
-// ─── Homebridge v2 entry point ──────────────────────────────────────────────
+var areas_armed = [];
+
+// ─── Homebridge entry point ─────────────────────────────────────────────────
 module.exports = (api) => {
-    api.registerPlatform("Texecom", TexecomPlatform);
+    api.registerPlatform(PLATFORM_NAME, TexecomPlatform);
 };
 
 // ─── Platform ────────────────────────────────────────────────────────────────
@@ -34,13 +37,28 @@ class TexecomPlatform {
         this.ip_port = config["ip_port"];
         this.udl = config["udl"];
 
+        // Which panel user numbers mean what when the panel reports an area as
+        // armed. The panel does not say whether that was a full or a part arm,
+        // so the user number is the only hint we get.
+        this.remote_users = parseUserList(config["remote_users"]);
+        this.app_users = parseUserList(config["app_users"]);
+        this.default_arm_state = String(config["default_arm_state"] || "away").toLowerCase();
+
+        // Accessories restored from the Homebridge cache, keyed by UUID.
+        this.cachedAccessories = new Map();
+
         this.api.on('didFinishLaunching', () => {
             this._setupAccessories();
         });
     }
 
-    // Required by v2 — called for each cached accessory; we don't cache, so no-op
-    configureAccessory(accessory) { }
+    // Called once for every accessory Homebridge has cached for this platform,
+    // before didFinishLaunching. Hold on to them so they are reused rather than
+    // recreated, which is what keeps them in place in the Home app.
+    configureAccessory(accessory) {
+        this.log.debug(`Restoring cached accessory ${accessory.displayName}`);
+        this.cachedAccessories.set(accessory.UUID, accessory);
+    }
 
     _setupAccessories() {
         const platform = this;
@@ -51,31 +69,67 @@ class TexecomPlatform {
         const zoneCount = zoneAccessories.length;
         const areaCount = areaAccessories.length;
 
-        // Publish all accessories as external accessories (no cache needed)
-        // UUID is namespaced with type prefix to prevent collisions between a zone
-        // and an area that share the same zone_number / SN.
-        const publishAccessory = (acc, typePrefix) => {
-            acc._platform = platform; // inject platform ref for onSet handler
-            const uuid = hap.uuid.generate(`${typePrefix}:${acc.sn}`);
-            const hapAcc = new api.platformAccessory(acc.name, uuid);
+        const activeUUIDs = new Set();
 
-            const [, mainSvc] = acc.getServices();
+        // Accessories are published through the Homebridge bridge, so they turn
+        // up in the Home app on their own.
+        //
+        // The UUID deliberately reproduces the scheme Homebridge used for the
+        // static platform in 4.2.8 and earlier - uuid.generate(platform name +
+        // ":" + accessory name) - so that an accessory upgraded from an older
+        // release keeps its identity, and with it its room, its name and any
+        // automations it takes part in.
+        const attachAccessory = (acc) => {
+            const uuid = hap.uuid.generate(`${PLATFORM_NAME}:${acc.name}`);
 
-            // Populate the built-in AccessoryInformation service
-            hapAcc.getService(hap.Service.AccessoryInformation)
-                .setCharacteristic(hap.Characteristic.Manufacturer, "Homebridge")
-                .setCharacteristic(hap.Characteristic.Model, `Texecom ${typePrefix === "area" ? "Area" : "Zone"}`)
-                .setCharacteristic(hap.Characteristic.SerialNumber, acc.sn);
+            if (activeUUIDs.has(uuid)) {
+                platform.log.error(`Duplicate accessory name "${acc.name}" in config, names must be unique. Skipping.`);
+                return;
+            }
+            activeUUIDs.add(uuid);
 
-            hapAcc.addService(mainSvc);
-            api.publishExternalAccessories("homebridge-texecom-full", [hapAcc]);
+            let hapAccessory = platform.cachedAccessories.get(uuid);
+            const isNew = !hapAccessory;
+
+            if (isNew) {
+                platform.log.log(`Adding accessory ${acc.name}`);
+                hapAccessory = new api.platformAccessory(acc.name, uuid);
+            }
+
+            acc.setupServices(hapAccessory, platform);
+
+            if (isNew) {
+                api.registerPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, [hapAccessory]);
+            } else {
+                api.updatePlatformAccessories([hapAccessory]);
+            }
+
+            platform.cachedAccessories.set(uuid, hapAccessory);
         };
 
-        zoneAccessories.forEach(acc => publishAccessory(acc, "zone"));
-        areaAccessories.forEach(acc => publishAccessory(acc, "area"));
+        zoneAccessories.forEach(attachAccessory);
+        areaAccessories.forEach(attachAccessory);
+
+        // Anything cached that is no longer in the config has to go, otherwise
+        // it lingers in the Home app as an unresponsive accessory.
+        const stale = [...platform.cachedAccessories.entries()].filter(([uuid]) => !activeUUIDs.has(uuid));
+        if (stale.length > 0) {
+            stale.forEach(([uuid, accessory]) => {
+                platform.log.log(`Removing accessory ${accessory.displayName}, no longer in config`);
+                platform.cachedAccessories.delete(uuid);
+            });
+            api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, stale.map(([, accessory]) => accessory));
+        }
+
+        const findArea = (area_number) => areaAccessories.find(a => Number(a.zone_number) === Number(area_number));
 
         // ── Data processing ──────────────────────────────────────────────────
-        function processData(data) {
+        function processData(raw) {
+            const data = String(raw).trim();
+            if (!data) {
+                return;
+            }
+
             if (S(data).startsWith('"Z')) {
                 var zone_data = Number(S(S(data).between('Z')).left(4).s);
                 var updated_zone = Number(S(S(data).between('Z')).left(3).s);
@@ -95,7 +149,6 @@ class TexecomPlatform {
                                         if (zone == zpad(updated_zone, 3) && is_armed(areaAccessories[a].zone_number)) {
                                             var stateValue = hap.Characteristic.SecuritySystemCurrentState.ALARM_TRIGGERED;
                                             platform.log.log(`Area ${areaAccessories[a].zone_number} manual triggered`);
-                                            setByAlarm = true;
                                             areaAccessories[a].changeHandler(stateValue);
                                         }
                                     });
@@ -110,13 +163,24 @@ class TexecomPlatform {
 
             } else if (S(data).startsWith('"A') || S(data).startsWith('"D') || S(data).startsWith('"L')) {
                 const Characteristic = hap.Characteristic;
-                var updated_area = Number(S(S(data).substring(2, 5)));
-                var status = S(data).substring(1, 2);
-                var user = S(data).substring(5, 7);
-                var stateValue;
-                const armedByUser = user;
 
-                switch (String(status)) {
+                // "Saaauu - S is the status letter, aaa the area, uu the user.
+                // The user number is not fixed width, a panel with more than 99
+                // users reports three digits, so take every digit that is there
+                // rather than a fixed slice.
+                const parsed = /^"([ADL])(\d{3})(\d*)/.exec(data);
+                if (!parsed) {
+                    platform.log.debug(`Malformed area message from Texecom: ${data}`);
+                    return;
+                }
+
+                const status = parsed[1];
+                const updated_area = Number(parsed[2]);
+                const user = parsed[3];
+                const area = findArea(updated_area);
+                var stateValue;
+
+                switch (status) {
                     case "L":
                         stateValue = Characteristic.SecuritySystemCurrentState.ALARM_TRIGGERED;
                         platform.log.log(`Area ${updated_area} triggered`);
@@ -126,31 +190,17 @@ class TexecomPlatform {
                         stateValue = Characteristic.SecuritySystemCurrentState.DISARMED;
                         platform.log.log(`Area ${updated_area} disarmed by User ${user}`);
                         areas_armed = areas_armed.filter(v => v !== zpad(updated_area, 3));
+                        // The area is disarmed, so whatever we last asked the
+                        // panel for no longer tells us anything about it.
+                        if (area) {
+                            area.pending_target_state = null;
+                        }
                         break;
 
                     case "A":
-                        if (user == "17") {
-                            stateValue = Characteristic.SecuritySystemCurrentState.AWAY_ARM;
-                            platform.log.log(`Area ${updated_area} armed (away) by User ${user}`);
-                        } else if (user == "25" || user == "254") {
-                            const targetState = areaAccessories[updated_area - 1].target_State;
-                            switch (targetState) {
-                                case Characteristic.SecuritySystemTargetState.AWAY_ARM:
-                                    stateValue = Characteristic.SecuritySystemCurrentState.AWAY_ARM; break;
-                                case Characteristic.SecuritySystemTargetState.STAY_ARM:
-                                    stateValue = Characteristic.SecuritySystemCurrentState.STAY_ARM; break;
-                                case Characteristic.SecuritySystemTargetState.NIGHT_ARM:
-                                    stateValue = Characteristic.SecuritySystemCurrentState.NIGHT_ARM; break;
-                                case Characteristic.SecuritySystemTargetState.DISARM:
-                                    stateValue = Characteristic.SecuritySystemCurrentState.DISARMED; break;
-                                default:
-                                    platform.log.error(`Unknown target state: ${targetState}`);
-                                    return;
-                            }
-                            platform.log.log(`User ${user}: Target state ${targetState} → stateValue ${stateValue}`);
-                        } else {
-                            stateValue = Characteristic.SecuritySystemCurrentState.NIGHT_ARM;
-                            platform.log.log(`Area ${updated_area} armed (night) by User ${user}`);
+                        stateValue = resolveArmedState(platform, area, user, updated_area);
+                        if (stateValue == null) {
+                            return;
                         }
 
                         if (stateValue == Characteristic.SecuritySystemCurrentState.AWAY_ARM) {
@@ -168,13 +218,9 @@ class TexecomPlatform {
                         return;
                 }
 
-                for (var i = 0; i < areaCount; i++) {
-                    if (areaAccessories[i].zone_number == updated_area) {
-                        platform.log.debug(`Area match found, updating area status in HomeKit to ${stateValue}`);
-                        setByAlarm = true;
-                        areaAccessories[i].changeHandler(stateValue, armedByUser);
-                        break;
-                    }
+                if (area) {
+                    platform.log.debug(`Area match found, updating area status in HomeKit to ${stateValue}`);
+                    area.changeHandler(stateValue, user);
                 }
 
             } else {
@@ -240,6 +286,101 @@ class TexecomPlatform {
     }
 }
 
+// ─── Working out what "armed" means ──────────────────────────────────────────
+// The panel reports an area as armed without saying whether that was a full arm
+// or a part arm, so the state shown in HomeKit is worked out from, in order:
+//
+//   1. the user number, if it has been configured as a remote/keyfob
+//   2. the state we asked the panel for, if this arm came from HomeKit
+//   3. the configured default for every other user, e.g. a keypad arm
+//
+// Returns a SecuritySystemCurrentState, or null if it cannot be worked out.
+function resolveArmedState(platform, area, user, updated_area) {
+    const Characteristic = platform.hap.Characteristic;
+    const user_number = normaliseUser(user);
+
+    if (platform.remote_users.includes(user_number)) {
+        platform.log.log(`Area ${updated_area} armed (away) by remote User ${user}`);
+        return Characteristic.SecuritySystemCurrentState.AWAY_ARM;
+    }
+
+    const pending = area ? area.pending_target_state : null;
+
+    if (pending != null) {
+        const stateValue = targetToCurrentState(Characteristic, pending);
+        if (stateValue == null) {
+            platform.log.error(`Unknown target state: ${pending}`);
+            return null;
+        }
+        platform.log.log(`Area ${updated_area} armed by User ${user}, using the state requested from HomeKit (${stateValue})`);
+        return stateValue;
+    }
+
+    if (platform.app_users.includes(user_number)) {
+        platform.log.debug(`User ${user} is configured as an app user but nothing was requested from HomeKit, falling back to the default arm state`);
+    }
+
+    switch (platform.default_arm_state) {
+        case "night":
+            platform.log.log(`Area ${updated_area} armed (night) by User ${user}`);
+            return Characteristic.SecuritySystemCurrentState.NIGHT_ARM;
+        case "stay":
+        case "home":
+            platform.log.log(`Area ${updated_area} armed (home) by User ${user}`);
+            return Characteristic.SecuritySystemCurrentState.STAY_ARM;
+        default:
+            platform.log.log(`Area ${updated_area} armed (away) by User ${user}`);
+            return Characteristic.SecuritySystemCurrentState.AWAY_ARM;
+    }
+}
+
+function targetToCurrentState(Characteristic, targetState) {
+    switch (targetState) {
+        case Characteristic.SecuritySystemTargetState.AWAY_ARM:
+            return Characteristic.SecuritySystemCurrentState.AWAY_ARM;
+        case Characteristic.SecuritySystemTargetState.STAY_ARM:
+            return Characteristic.SecuritySystemCurrentState.STAY_ARM;
+        case Characteristic.SecuritySystemTargetState.NIGHT_ARM:
+            return Characteristic.SecuritySystemCurrentState.NIGHT_ARM;
+        case Characteristic.SecuritySystemTargetState.DISARM:
+            return Characteristic.SecuritySystemCurrentState.DISARMED;
+        default:
+            return null;
+    }
+}
+
+function currentToTargetState(Characteristic, currentState) {
+    switch (currentState) {
+        case Characteristic.SecuritySystemCurrentState.NIGHT_ARM:
+            return Characteristic.SecuritySystemTargetState.NIGHT_ARM;
+        case Characteristic.SecuritySystemCurrentState.AWAY_ARM:
+            return Characteristic.SecuritySystemTargetState.AWAY_ARM;
+        case Characteristic.SecuritySystemCurrentState.STAY_ARM:
+            return Characteristic.SecuritySystemTargetState.STAY_ARM;
+        case Characteristic.SecuritySystemCurrentState.DISARMED:
+            return Characteristic.SecuritySystemTargetState.DISARM;
+        default:
+            return null; // alarm triggered has no corresponding target state
+    }
+}
+
+function parseUserList(value) {
+    if (value === null || value === undefined || value === "") {
+        return [];
+    }
+    const values = Array.isArray(value) ? value : String(value).split(",");
+    return values.map(normaliseUser).filter(v => v !== null);
+}
+
+// User numbers are compared as numbers so that 17, "17" and "017" all match.
+function normaliseUser(value) {
+    if (value === null || value === undefined || String(value).trim() === "") {
+        return null;
+    }
+    const user_number = Number(String(value).trim());
+    return Number.isNaN(user_number) ? null : user_number;
+}
+
 // ─── Accessory ───────────────────────────────────────────────────────────────
 function TexecomAccessory(log, config, hap) {
     this.log = log;
@@ -251,9 +392,13 @@ function TexecomAccessory(log, config, hap) {
     this.dwell_time = config["dwell"] || 0;
     this.dwell_timer = null;
 
-    if (config["area_type"] == "securitysystem") {
-        this.target_State = hap.Characteristic.SecuritySystemTargetState.DISARM;
-    }
+    // Replaced with the real handler once the accessory has been published.
+    this.changeHandler = function () { };
+
+    // The state last requested from HomeKit and accepted by the panel, cleared
+    // when the area is disarmed. Null means the panel was armed by something
+    // other than us, so we have nothing to go on.
+    this.pending_target_state = null;
 
     try {
         if (Array.isArray(config["zones"])) {
@@ -275,23 +420,53 @@ function TexecomAccessory(log, config, hap) {
 
 TexecomAccessory.prototype = {
 
-    getServices: function () {
+    // Builds the services on a bridged platform accessory. A cached accessory
+    // keeps the services it already has, they are only added when missing, so
+    // that restarting Homebridge does not disturb the accessory in HomeKit.
+    setupServices: function (hapAccessory, platform) {
         const { Service, Characteristic } = this.hap;
         const me = this;
 
-        var service, changeAction;
+        this._platform = platform;
 
-        // informationService is returned but the platform populates the
-        // built-in one on the platformAccessory; this keeps the shape identical
-        var informationService = new Service.AccessoryInformation();
-        informationService
+        hapAccessory.getService(Service.AccessoryInformation)
+            .setCharacteristic(Characteristic.Name, this.name)
             .setCharacteristic(Characteristic.Manufacturer, "Homebridge")
             .setCharacteristic(Characteristic.Model, `Texecom ${this.zone_type === "securitysystem" ? "Area" : "Zone"}`)
             .setCharacteristic(Characteristic.SerialNumber, this.sn);
 
+        var ServiceType, changeAction;
+
         switch (this.zone_type) {
             case "contact":
-                service = new Service.ContactSensor();
+                ServiceType = Service.ContactSensor;
+                break;
+            case "smoke":
+                ServiceType = Service.SmokeSensor;
+                break;
+            case "carbonmonoxide":
+                ServiceType = Service.CarbonMonoxideSensor;
+                break;
+            case "securitysystem":
+                ServiceType = Service.SecuritySystem;
+                break;
+            default: // motion (and fallback)
+                ServiceType = Service.MotionSensor;
+                break;
+        }
+
+        // Drop anything left over from a zone_type that has since been changed.
+        hapAccessory.services
+            .filter(s => s.UUID !== Service.AccessoryInformation.UUID && s.UUID !== ServiceType.UUID)
+            .forEach(s => {
+                me.log.debug(`Removing stale service from ${me.name}`);
+                hapAccessory.removeService(s);
+            });
+
+        const service = hapAccessory.getService(ServiceType) || hapAccessory.addService(ServiceType, this.name);
+
+        switch (this.zone_type) {
+            case "contact":
                 changeAction = function (newState) {
                     service.getCharacteristic(Characteristic.ContactSensorState)
                         .updateValue(newState
@@ -301,7 +476,6 @@ TexecomAccessory.prototype = {
                 break;
 
             case "smoke":
-                service = new Service.SmokeSensor();
                 changeAction = function (newState) {
                     service.getCharacteristic(Characteristic.SmokeDetected)
                         .updateValue(newState
@@ -311,7 +485,6 @@ TexecomAccessory.prototype = {
                 break;
 
             case "carbonmonoxide":
-                service = new Service.CarbonMonoxideSensor();
                 changeAction = function (newState) {
                     service.getCharacteristic(Characteristic.CarbonMonoxideDetected)
                         .updateValue(newState
@@ -321,22 +494,12 @@ TexecomAccessory.prototype = {
                 break;
 
             case "securitysystem":
-                service = new Service.SecuritySystem();
-
                 changeAction = function (newState) {
-                    var targetState;
-                    switch (newState) {
-                        case Characteristic.SecuritySystemCurrentState.NIGHT_ARM:
-                            targetState = Characteristic.SecuritySystemTargetState.NIGHT_ARM; break;
-                        case Characteristic.SecuritySystemCurrentState.AWAY_ARM:
-                            targetState = Characteristic.SecuritySystemTargetState.AWAY_ARM; break;
-                        case Characteristic.SecuritySystemCurrentState.STAY_ARM:
-                            targetState = Characteristic.SecuritySystemTargetState.STAY_ARM; break;
-                        case Characteristic.SecuritySystemCurrentState.DISARMED:
-                            targetState = Characteristic.SecuritySystemTargetState.DISARM; break;
-                        default:
-                            targetState = null; break;
-                    }
+                    const targetState = currentToTargetState(Characteristic, newState);
+
+                    // updateValue, never setValue: setValue would fire the set
+                    // handler below and send the state straight back to the
+                    // panel as though the user had asked for it.
                     if (targetState != null) {
                         service.getCharacteristic(Characteristic.SecuritySystemTargetState).updateValue(targetState);
                     }
@@ -349,17 +512,10 @@ TexecomAccessory.prototype = {
 
                 var area = this;
 
-                // v2: onSet returns a Promise; deprecated on('set', cb) removed
                 service.getCharacteristic(Characteristic.SecuritySystemTargetState)
                     .onSet(function (value) {
                         return new Promise((resolve, reject) => {
-                            if (setByAlarm) {
-                                me.log.debug(`Ignoring set — state change came from alarm itself.`);
-                                setByAlarm = false;
-                                resolve();
-                                return;
-                            }
-                            // platform reference is injected after construction
+                            // platform reference is injected above
                             const platform = me._platform;
                             if (platform && platform.udl != null) {
                                 areaTargetSecurityStateSet(platform, area, service, value,
@@ -373,14 +529,13 @@ TexecomAccessory.prototype = {
                 break;
 
             default: // motion (and fallback)
-                service = new Service.MotionSensor();
                 changeAction = function (newState) {
                     service.getCharacteristic(Characteristic.MotionDetected).updateValue(newState);
                 };
                 break;
         }
 
-        this.changeHandler = function (status) {
+        this.changeHandler = function (status, user) {
             const newState = status;
             me.log.debug(`Dwell = ${me.dwell_time}`);
             if (!newState && me.dwell_time > 0) {
@@ -389,9 +544,15 @@ TexecomAccessory.prototype = {
                 if (me.dwell_timer) clearTimeout(me.dwell_timer);
                 changeAction(newState);
             }
+
+            if (!user) {
+                me.log.debug(`Changing state with changeHandler to ${newState}`);
+            } else {
+                me.log.debug(`Changing state with changeHandler to ${newState} by User ${user}`);
+            }
         };
 
-        return [informationService, service];
+        return service;
     }
 };
 
@@ -426,24 +587,20 @@ function areaTargetSecurityStateSet(platform, accessory, service, value, callbac
     writeCommandAndWaitForOK(platform.texecomConnection, `W${platform.udl}`)
         .then(() => writeCommandAndWaitForOK(platform.texecomConnection, command, 0))
         .then(() => {
-            var currentState;
-            switch (value) {
-                case Characteristic.SecuritySystemTargetState.NIGHT_ARM:
-                    currentState = Characteristic.SecuritySystemCurrentState.NIGHT_ARM; break;
-                case Characteristic.SecuritySystemTargetState.AWAY_ARM:
-                    currentState = Characteristic.SecuritySystemCurrentState.AWAY_ARM; break;
-                case Characteristic.SecuritySystemTargetState.STAY_ARM:
-                    currentState = Characteristic.SecuritySystemCurrentState.STAY_ARM; break;
-                case Characteristic.SecuritySystemTargetState.DISARM:
-                    currentState = Characteristic.SecuritySystemCurrentState.DISARMED; break;
-                default:
-                    platform.log.debug(`Unknown target alarm state ${value}`);
-                    callback(new Error("Unknown target state"));
-                    return;
+            // OK response from alarm is only indication that the target state has been reached
+            const currentState = targetToCurrentState(Characteristic, value);
+            if (currentState == null) {
+                platform.log.debug(`Unknown target alarm state ${value}`);
+                callback(new Error("Unknown target state"));
+                return;
             }
             platform.log.debug(`Area ${accessory.zone_number} → state ${currentState}`);
             service.getCharacteristic(Characteristic.SecuritySystemCurrentState).updateValue(currentState);
-            accessory.target_State = currentState;
+
+            // Remember what was asked for. The panel reports the area as armed
+            // once the exit delay has run, without saying how it was armed, and
+            // this is what stops that report being taken for a part arm.
+            accessory.pending_target_state = (value === Characteristic.SecuritySystemTargetState.DISARM) ? null : value;
             callback();
         })
         .catch(err => {

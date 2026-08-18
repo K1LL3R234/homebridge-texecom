@@ -96,6 +96,18 @@ For UDL
 | --- | --- | --- |
 | `udl` | 1234 | The UDL code on the panel to be able to arm and disarm alarm |
 
+For arm state reporting
+
+When an area is armed the panel reports the area and the user number, but not whether it was a full arm or a part arm. These settings say how to read that.
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `remote_users` | `[]` | User numbers that arm using a remote or keyfob, e.g. `[17]`. An arm by one of these users is always reported to HomeKit as Away. |
+| `app_users` | `[]` | User numbers the panel reports when an area is armed from this plugin, e.g. `[25, 254]`. |
+| `default_arm_state` | `"away"` | What to report for an arm by any other user, at a keypad for example. One of `away`, `night` or `stay`. |
+
+When the arm was started from HomeKit the plugin already knows what was asked for and reports that, whatever the user number. These settings only come into play for an arm that started somewhere else.
+
 ### Per-zone Configuration
 
 This plugin is a platform plugin so you must configure each zone from your Texecom intruder alarm into your config individually.

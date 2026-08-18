@@ -2,6 +2,18 @@
 
 This change log documents all release versions of homebridge-texecom
 
+### 4.3.1-beta.0 (2026-08-18)
+
+- **FIX** - Accessories are bridged again instead of being published as external accessories. 4.3.0 required every zone and area to be added to the Home app by hand, this restores the behaviour of 4.2.8 and earlier.
+- **FIX** - Accessory UUIDs now match the scheme used up to 4.2.8, so upgrading from 4.2.8 keeps existing accessories along with their rooms, names and automations.
+- **FIX** - Accessories are held in the Homebridge accessory cache and reused across restarts, and accessories removed from the config are unregistered.
+- **FIX** - The first arm or disarm from a HomeKit button is no longer ignored (#26). The flag used to suppress echoes from the panel was never being cleared once alarm driven updates moved to `updateValue`.
+- **FIX** - A full arm no longer changes to Night in the Home app a minute later (#25). The user numbers that decide how an arm is reported are configurable via `remote_users`, `app_users` and `default_arm_state` instead of being fixed in code, and an arm started from HomeKit now reports the state that was actually asked for.
+- **FIX** - User numbers over 99 are no longer truncated when reading area messages from the panel.
+- **FIX** - Areas are matched by area number rather than by their position in the config.
+- **TWEAK** - `engines.homebridge` widened back to `^1.6.0 || ^2.0.0`, 4.3.0 refused to run on Homebridge 1.x.
+- **TWEAK** - Removed the unused `crypto-js` dependency.
+
 ### 4.3.0 (2026-05-23)
 
 - **FIX** - Homebridge v2 compatibility: updated to new platform API with `didFinishLaunching` and `configureAccessory`

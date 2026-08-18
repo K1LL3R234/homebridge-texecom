@@ -46,6 +46,35 @@
                 "maxLength": 6,
                 "title": "UDL"
             },
+            "remote_users": {
+                "type": "array",
+                "title": "Remote / Keyfob Users",
+                "description": "Panel user numbers that arm using a remote or keyfob. An arm by one of these users is always shown as Away in HomeKit.",
+                "items": {
+                    "type": "integer",
+                    "title": "User Number"
+                }
+            },
+            "app_users": {
+                "type": "array",
+                "title": "App Users",
+                "description": "Panel user numbers the panel reports when an area is armed from this plugin. An arm by one of these users is shown as whatever was asked for in HomeKit.",
+                "items": {
+                    "type": "integer",
+                    "title": "User Number"
+                }
+            },
+            "default_arm_state": {
+                "type": "string",
+                "title": "Default Arm State",
+                "default": "away",
+                "description": "What to show in HomeKit when an area is armed by any other user, at a keypad for example. The panel does not report whether an arm was full or part, so this is a best guess.",
+                "enum": [
+                    "away",
+                    "night",
+                    "stay"
+                ]
+            },
             "zones": {
                 "type": "array",
                 "title": "Zones",
