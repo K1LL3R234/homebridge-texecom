@@ -411,8 +411,11 @@ function TexecomAccessory(log, config, hap) {
     if (config["sn"]) {
         this.sn = config["sn"];
     } else {
+        // An area and a zone can carry the same number, which used to give
+        // them the same serial number. Only the area side is namespaced so
+        // that zone serial numbers stay as they have always been.
         const shasum = crypto.createHash('sha1');
-        shasum.update(this.zone_number);
+        shasum.update(this.zone_type === "securitysystem" ? `area:${this.zone_number}` : this.zone_number);
         this.sn = shasum.digest('base64');
         log.log(`Computed SN: ${this.sn}`);
     }
