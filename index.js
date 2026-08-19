@@ -563,12 +563,14 @@ TexecomAccessory.prototype = {
 function areaTargetSecurityStateSet(platform, accessory, service, value, callback) {
     const { Characteristic } = platform.hap;
 
-    const hexMapping = {
-        '1': 0x01, '2': 0x02, '3': 0x04, '4': 0x08,
-        '5': 0x10, '6': 0x20, '7': 0x40, '8': 0x80
-    };
+    const mask = areaMask([Number(accessory.zone_number)]);
+    if (mask === null) {
+        platform.log.error(`Area ${accessory.zone_number} is out of range, the panel only addresses areas 1 to 8`);
+        callback(new Error("Area out of range"));
+        return;
+    }
 
-    var area_number = String.fromCharCode(parseInt(hexMapping[parseInt(accessory.zone_number, 10)], 16));
+    var area_number = String.fromCharCode(mask);
 
     var command;
     switch (value) {
@@ -654,6 +656,21 @@ function writeCommandAndWaitForOK(connection, command, retryCount = 1) {
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+// The panel addresses areas as a bitmask in a single byte, area 1 being the
+// low bit, so several areas can be armed or disarmed with one command.
+// Returns null if any area is outside the 1 to 8 the byte can carry.
+function areaMask(area_numbers) {
+    var mask = 0;
+    for (const value of area_numbers) {
+        const area = Number(value);
+        if (!Number.isInteger(area) || area < 1 || area > 8) {
+            return null;
+        }
+        mask |= 1 << (area - 1);
+    }
+    return mask === 0 ? null : mask;
+}
+
 function is_armed(area_number) {
     return areas_armed.some(v => v === area_number);
 }

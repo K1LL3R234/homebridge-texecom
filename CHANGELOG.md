@@ -2,6 +2,11 @@
 
 This change log documents all release versions of homebridge-texecom
 
+### 4.3.1-beta.2 (2026-08-19)
+
+- **FIX** - Arming or disarming areas 5 to 8 addressed the wrong areas. The area bitmask was being run through `parseInt(..., 16)` a second time, so area 5 asked the panel for areas 2, 3 and 5, area 6 for 2, 5 and 6, area 7 for 3, 6 and 7, and area 8 sent a value too large to fit the byte. Areas 1 to 4 were unaffected, their masks survive the round trip. Present since 4.2.8.
+- **FIX** - An area number outside the 1 to 8 the panel can address is now reported rather than quietly sending a null byte.
+
 ### 4.3.1-beta.1 (2026-08-19)
 
 - **FIX** - The arm/disarm command is retried once, as the login already was. Panels have been seen to ignore the first write and answer only the resend, which silently lost the command.
