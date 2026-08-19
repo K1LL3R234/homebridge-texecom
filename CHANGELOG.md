@@ -4,6 +4,7 @@ This change log documents all release versions of homebridge-texecom
 
 ### 4.3.1-beta.1 (2026-08-19)
 
+- **FIX** - The arm/disarm command is retried once, as the login already was. Panels have been seen to ignore the first write and answer only the resend, which silently lost the command.
 - **FIX** - An area and a zone carrying the same number were given the same serial number, so a panel with, say, zone 1 and area 1 published several accessories that were identical as far as HomeKit was concerned. Area serial numbers are now namespaced, zone serial numbers are unchanged. Present since 4.2.8.
 
 ### 4.3.1-beta.0 (2026-08-18)

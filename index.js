@@ -587,8 +587,12 @@ function areaTargetSecurityStateSet(platform, accessory, service, value, callbac
 
     platform.log.debug(`Sending command ${value} to area ${accessory.zone_number}`);
 
+    // Both the login and the command itself get a retry. Panels have been seen
+    // to ignore the first write and answer the resend, so a command sent only
+    // once can be swallowed. Arming an already armed area is a no-op, so a
+    // duplicate is harmless.
     writeCommandAndWaitForOK(platform.texecomConnection, `W${platform.udl}`)
-        .then(() => writeCommandAndWaitForOK(platform.texecomConnection, command, 0))
+        .then(() => writeCommandAndWaitForOK(platform.texecomConnection, command))
         .then(() => {
             // OK response from alarm is only indication that the target state has been reached
             const currentState = targetToCurrentState(Characteristic, value);
