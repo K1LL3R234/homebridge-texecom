@@ -45,6 +45,10 @@ class TexecomPlatform {
         // to a bridged one, whatever we do at this end.
         this.external_accessories = config["external_accessories"] === true;
 
+        // Combined areas: one accessory that arms or disarms several areas
+        // at once. The panel takes them all in a single command.
+        this.area_groups = config["area_groups"] || [];
+
         // Which panel user numbers mean what when the panel reports an area as
         // armed. The panel does not say whether that was a full or a part arm,
         // so the user number is the only hint we get.
@@ -63,6 +67,10 @@ class TexecomPlatform {
     // Called once for every accessory Homebridge has cached for this platform,
     // before didFinishLaunching. Hold on to them so they are reused rather than
     // recreated, which is what keeps them in place in the Home app.
+    findAreaAccessory(area_number) {
+        return (this._areaAccessories || []).find(a => Number(a.zone_number) === Number(area_number));
+    }
+
     configureAccessory(accessory) {
         this.log.debug(`Restoring cached accessory ${accessory.displayName}`);
         this.cachedAccessories.set(accessory.UUID, accessory);
@@ -72,10 +80,51 @@ class TexecomPlatform {
         const platform = this;
         const { hap, api } = this;
 
-        const zoneAccessories = this.zones.map(z => new TexecomAccessory(this.log, z, hap));
-        const areaAccessories = this.areas.map(a => new TexecomAccessory(this.log, a, hap));
+        const zoneAccessories = this.zones.map(z => new TexecomAccessory(this.log, z, hap, "zone"));
+        const areaAccessories = this.areas.map(a => new TexecomAccessory(this.log, a, hap, "area"));
+        const groupAccessories = this.area_groups.map(g => new TexecomAccessory(this.log, g, hap, "group"));
         const zoneCount = zoneAccessories.length;
         const areaCount = areaAccessories.length;
+
+        this._areaAccessories = areaAccessories;
+
+        // The last state we heard for each area, whether or not that area has
+        // an accessory of its own. Combined areas are worked out from this.
+        const areaStates = new Map();
+
+        // A combined area counts as armed only when every one of its areas is
+        // armed, so it never claims to be set while part of it is open. An
+        // alarm in any one of them shows through regardless.
+        function refreshGroups() {
+            const Characteristic = hap.Characteristic;
+
+            groupAccessories.forEach(group => {
+                const states = group.area_numbers.map(n => areaStates.get(n));
+
+                if (states.some(s => s === Characteristic.SecuritySystemCurrentState.ALARM_TRIGGERED)) {
+                    group.changeHandler(Characteristic.SecuritySystemCurrentState.ALARM_TRIGGERED);
+                    return;
+                }
+
+                const armed = states.filter(s => s !== undefined && s !== Characteristic.SecuritySystemCurrentState.DISARMED);
+                if (states.length === 0 || armed.length !== states.length) {
+                    group.changeHandler(Characteristic.SecuritySystemCurrentState.DISARMED);
+                    return;
+                }
+
+                // Everything is armed. Use what was asked for from HomeKit if we
+                // know it, then a state the areas agree on, otherwise call it away.
+                var stateValue;
+                if (group.pending_target_state != null) {
+                    stateValue = targetToCurrentState(Characteristic, group.pending_target_state);
+                } else if (armed.every(s => s === armed[0])) {
+                    stateValue = armed[0];
+                } else {
+                    stateValue = Characteristic.SecuritySystemCurrentState.AWAY_ARM;
+                }
+                group.changeHandler(stateValue);
+            });
+        }
 
         const activeUUIDs = new Set();
 
@@ -117,7 +166,9 @@ class TexecomPlatform {
 
         // Reproduces 4.3.0 exactly: the same UUID, from the same serial number,
         // so Homebridge gives the accessory back the pairing it already had and
-        // the Home app carries on as though nothing happened.
+        // the Home app carries on as though nothing happened. A combined area
+        // is new in 4.4.0, so it has no 4.3.0 identity to preserve, but it is
+        // published the same way so the whole install stays off the bridge.
         const publishExternal = (acc, typePrefix) => {
             const uuid = hap.uuid.generate(`${typePrefix}:${acc.legacy_sn}`);
             const hapAccessory = new api.platformAccessory(acc.name, uuid);
@@ -133,6 +184,7 @@ class TexecomPlatform {
 
             zoneAccessories.forEach(acc => publishExternal(acc, "zone"));
             areaAccessories.forEach(acc => publishExternal(acc, "area"));
+            groupAccessories.forEach(acc => publishExternal(acc, "group"));
 
             // Nothing is on the bridge in this mode, so anything left in the
             // cache from a bridged run is no longer being served by us and
@@ -147,6 +199,7 @@ class TexecomPlatform {
         } else {
             zoneAccessories.forEach(attachAccessory);
             areaAccessories.forEach(attachAccessory);
+            groupAccessories.forEach(attachAccessory);
 
             // Anything cached that is no longer in the config has to go, otherwise
             // it lingers in the Home app as an unresponsive accessory.
@@ -189,6 +242,8 @@ class TexecomPlatform {
                                             var stateValue = hap.Characteristic.SecuritySystemCurrentState.ALARM_TRIGGERED;
                                             platform.log.log(`Area ${areaAccessories[a].zone_number} manual triggered`);
                                             areaAccessories[a].changeHandler(stateValue);
+                                            areaStates.set(Number(areaAccessories[a].zone_number), stateValue);
+                                            refreshGroups();
                                         }
                                     });
                                 } catch (e) {
@@ -234,6 +289,11 @@ class TexecomPlatform {
                         if (area) {
                             area.pending_target_state = null;
                         }
+                        groupAccessories.forEach(g => {
+                            if (g.area_numbers.includes(updated_area)) {
+                                g.pending_target_state = null;
+                            }
+                        });
                         break;
 
                     case "A":
@@ -261,6 +321,9 @@ class TexecomPlatform {
                     platform.log.debug(`Area match found, updating area status in HomeKit to ${stateValue}`);
                     area.changeHandler(stateValue, user);
                 }
+
+                areaStates.set(updated_area, stateValue);
+                refreshGroups();
 
             } else {
                 platform.log.debug(`Unknown string from Texecom: ${S(data)}`);
@@ -421,15 +484,27 @@ function normaliseUser(value) {
 }
 
 // ─── Accessory ───────────────────────────────────────────────────────────────
-function TexecomAccessory(log, config, hap) {
+const MODELS = { zone: "Zone", area: "Area", group: "Combined Area" };
+
+function TexecomAccessory(log, config, hap, kind) {
     this.log = log;
     this.hap = hap;
+    this.kind = kind || "zone";
 
-    this.zone_number = zpad(config["zone_number"] || config["area_number"], 3);
     this.name = config["name"];
-    this.zone_type = config["zone_type"] || config["area_type"] || "motion";
     this.dwell_time = config["dwell"] || 0;
     this.dwell_timer = null;
+
+    if (this.kind === "group") {
+        // A combined area is addressed as several area numbers at once.
+        this.area_numbers = (config["areas"] || []).map(Number).filter(n => !Number.isNaN(n));
+        this.zone_number = this.area_numbers.join("+");
+        this.zone_type = "securitysystem";
+    } else {
+        this.zone_number = zpad(config["zone_number"] || config["area_number"], 3);
+        this.zone_type = config["zone_type"] || config["area_type"] || "motion";
+        this.area_numbers = this.zone_type === "securitysystem" ? [Number(this.zone_number)] : [];
+    }
 
     // Replaced with the real handler once the accessory has been published.
     this.changeHandler = function () { };
@@ -465,7 +540,8 @@ function TexecomAccessory(log, config, hap) {
         // them the same serial number. Only the area side is namespaced so
         // that zone serial numbers stay as they have always been.
         const shasum = crypto.createHash('sha1');
-        shasum.update(this.zone_type === "securitysystem" ? `area:${this.zone_number}` : this.zone_number);
+        shasum.update(this.kind === "group" ? `group:${this.zone_number}`
+            : this.zone_type === "securitysystem" ? `area:${this.zone_number}` : this.zone_number);
         this.sn = shasum.digest('base64');
         log.log(`Computed SN: ${this.sn}`);
     }
@@ -485,7 +561,7 @@ TexecomAccessory.prototype = {
         hapAccessory.getService(Service.AccessoryInformation)
             .setCharacteristic(Characteristic.Name, this.name)
             .setCharacteristic(Characteristic.Manufacturer, "Homebridge")
-            .setCharacteristic(Characteristic.Model, `Texecom ${this.zone_type === "securitysystem" ? "Area" : "Zone"}`)
+            .setCharacteristic(Characteristic.Model, `Texecom ${MODELS[this.kind] || "Zone"}`)
             .setCharacteristic(Characteristic.SerialNumber, serialNumber || this.sn);
 
         var ServiceType, changeAction;
@@ -613,7 +689,7 @@ TexecomAccessory.prototype = {
 function areaTargetSecurityStateSet(platform, accessory, service, value, callback) {
     const { Characteristic } = platform.hap;
 
-    const mask = areaMask([Number(accessory.zone_number)]);
+    const mask = areaMask(accessory.area_numbers);
     if (mask === null) {
         platform.log.error(`Area ${accessory.zone_number} is out of range, the panel only addresses areas 1 to 8`);
         callback(new Error("Area out of range"));
@@ -654,12 +730,29 @@ function areaTargetSecurityStateSet(platform, accessory, service, value, callbac
                 return;
             }
             platform.log.debug(`Area ${accessory.zone_number} → state ${currentState}`);
-            service.getCharacteristic(Characteristic.SecuritySystemCurrentState).updateValue(currentState);
+
+            // A combined area waits for each of its areas to report in, so HomeKit
+            // shows it arming until they all are. Updating it here instead would
+            // make it flick between armed and disarmed as they come in one by one.
+            if (accessory.kind !== "group") {
+                service.getCharacteristic(Characteristic.SecuritySystemCurrentState).updateValue(currentState);
+            }
 
             // Remember what was asked for. The panel reports the area as armed
             // once the exit delay has run, without saying how it was armed, and
             // this is what stops that report being taken for a part arm.
-            accessory.pending_target_state = (value === Characteristic.SecuritySystemTargetState.DISARM) ? null : value;
+            const pending = (value === Characteristic.SecuritySystemTargetState.DISARM) ? null : value;
+            accessory.pending_target_state = pending;
+
+            // A combined area asked on behalf of several areas, so their own
+            // accessories need to know too, otherwise they fall back to the
+            // configured default when the panel reports them armed.
+            accessory.area_numbers.forEach(n => {
+                const member = platform.findAreaAccessory(n);
+                if (member && member !== accessory) {
+                    member.pending_target_state = pending;
+                }
+            });
             callback();
         })
         .catch(err => {

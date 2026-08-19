@@ -125,6 +125,34 @@ If you set all that up under 4.3.0 and would rather keep it:
 That republishes them exactly as 4.3.0 did, with the same identities, so everything keeps working untouched. The trade-off is that they stay outside the bridge, so a zone added later still has to be paired by hand.
 
 Leaving it off, or leaving it out entirely, gives bridged accessories.
+### Combined Areas
+
+A combined area is a single accessory that arms or disarms several areas at once. The panel addresses areas as a bitmask, so all of them are armed with one command rather than several in a row.
+
+```json
+"area_groups": [
+    {
+        "name": "Everything",
+        "areas": [1, 2, 3, 4, 5],
+        "dwell": 0
+    },
+    {
+        "name": "House and Garage",
+        "areas": [1, 2],
+        "dwell": 0
+    }
+]
+```
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `name` | N/A | The name of the combined area as it will appear in HomeKit |
+| `areas` | N/A | The area numbers to arm and disarm together. The panel supports areas 1 to 8 |
+| `dwell` | 0 | The amount of time in ms before a cleared state is applied |
+
+The areas can also still be listed under `areas` and keep their own accessories, and an area may belong to more than one combined area.
+
+A combined area shows as armed only once every one of its areas is armed, so it never reports the house as set while part of it is still open. Until they are all armed HomeKit shows it arming. An alarm in any one of its areas shows through immediately.
 
 ### Per-zone Configuration
 

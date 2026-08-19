@@ -2,6 +2,10 @@
 
 This change log documents all release versions of homebridge-texecom
 
+### 4.4.0-beta.0 (2026-08-19)
+
+- **FEATURE** - Combined areas. One accessory can arm and disarm several areas at once, set up under `area_groups`. The panel addresses areas as a bitmask, so they go in a single command rather than one after another. A combined area reports armed only once every one of its areas is armed, showing as arming until then, and an alarm in any of them shows through straight away. The areas keep their own accessories, and an area can belong to more than one combined area.
+
 ### 4.3.1-beta.3 (2026-08-19)
 
 - **FEATURE** - `external_accessories` for installs that ran 4.3.0. That release published accessories outside the bridge, and HomeKit gives no way to move a standalone accessory onto a bridge without it counting as a new accessory, so the scenes, buttons and automations built on them would all have to be set up again. Turning this on republishes them the way 4.3.0 did, with the same identities, and they carry on working. Off by default, so a fresh install or one coming from 4.2.8 gets bridged accessories.

@@ -161,6 +161,40 @@
                 "default": false,
                 "description": "Only for installs that ran 4.3.0. That release published every zone and area outside the bridge, so they had to be added to the Home app by hand. Turn this on to keep publishing them that way, with the same identities, so the scenes, buttons and automations built on them keep working. Leave it off otherwise."
             },
+            "area_groups": {
+                "type": "array",
+                "title": "Combined Areas",
+                "description": "One accessory that arms or disarms several areas together. The panel takes them all in a single command.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "title": "Name"
+                        },
+                        "areas": {
+                            "type": "array",
+                            "title": "Areas",
+                            "description": "The area numbers to arm and disarm together, for example 1 and 2.",
+                            "items": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 8,
+                                "title": "Area Number"
+                            }
+                        },
+                        "dwell": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "title": "Dwell Time"
+                        }
+                    },
+                    "required": [
+                        "name",
+                        "areas"
+                    ]
+                }
+            },
             "debug":{
                 "type":"boolean",
                 "title":"Debug",
