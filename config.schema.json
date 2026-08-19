@@ -155,6 +155,12 @@
                     ]
                 }
             },
+            "external_accessories": {
+                "type": "boolean",
+                "title": "Keep 4.3.0 External Accessories",
+                "default": false,
+                "description": "Only for installs that ran 4.3.0. That release published every zone and area outside the bridge, so they had to be added to the Home app by hand. Turn this on to keep publishing them that way, with the same identities, so the scenes, buttons and automations built on them keep working. Leave it off otherwise."
+            },
             "debug":{
                 "type":"boolean",
                 "title":"Debug",

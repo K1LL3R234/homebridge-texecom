@@ -37,6 +37,14 @@ class TexecomPlatform {
         this.ip_port = config["ip_port"];
         this.udl = config["udl"];
 
+        // 4.3.0 published every accessory outside the bridge, which meant
+        // pairing each one by hand in the Home app. They are bridged again by
+        // default. An install that adopted 4.3.0 and built scenes, buttons or
+        // automations on those accessories can turn this on to keep them:
+        // HomeKit cannot carry that work across from a standalone accessory
+        // to a bridged one, whatever we do at this end.
+        this.external_accessories = config["external_accessories"] === true;
+
         // Which panel user numbers mean what when the panel reports an area as
         // armed. The panel does not say whether that was a full or a part arm,
         // so the user number is the only hint we get.
@@ -107,18 +115,49 @@ class TexecomPlatform {
             platform.cachedAccessories.set(uuid, hapAccessory);
         };
 
-        zoneAccessories.forEach(attachAccessory);
-        areaAccessories.forEach(attachAccessory);
+        // Reproduces 4.3.0 exactly: the same UUID, from the same serial number,
+        // so Homebridge gives the accessory back the pairing it already had and
+        // the Home app carries on as though nothing happened.
+        const publishExternal = (acc, typePrefix) => {
+            const uuid = hap.uuid.generate(`${typePrefix}:${acc.legacy_sn}`);
+            const hapAccessory = new api.platformAccessory(acc.name, uuid);
 
-        // Anything cached that is no longer in the config has to go, otherwise
-        // it lingers in the Home app as an unresponsive accessory.
-        const stale = [...platform.cachedAccessories.entries()].filter(([uuid]) => !activeUUIDs.has(uuid));
-        if (stale.length > 0) {
-            stale.forEach(([uuid, accessory]) => {
-                platform.log.log(`Removing accessory ${accessory.displayName}, no longer in config`);
-                platform.cachedAccessories.delete(uuid);
-            });
-            api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, stale.map(([, accessory]) => accessory));
+            acc.setupServices(hapAccessory, platform, acc.legacy_sn);
+
+            platform.log.debug(`Publishing ${acc.name} as an external accessory`);
+            api.publishExternalAccessories(PLUGIN_NAME, [hapAccessory]);
+        };
+
+        if (this.external_accessories) {
+            platform.log.log("Publishing external accessories, as 4.3.0 did. Each one is paired separately in the Home app.");
+
+            zoneAccessories.forEach(acc => publishExternal(acc, "zone"));
+            areaAccessories.forEach(acc => publishExternal(acc, "area"));
+
+            // Nothing is on the bridge in this mode, so anything left in the
+            // cache from a bridged run is no longer being served by us and
+            // would sit in the Home app not responding.
+            const bridged = [...platform.cachedAccessories.values()];
+            if (bridged.length > 0) {
+                platform.log.log(`Removing ${bridged.length} bridged accessories, this install publishes external accessories instead`);
+                api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, bridged);
+                platform.cachedAccessories.clear();
+            }
+
+        } else {
+            zoneAccessories.forEach(attachAccessory);
+            areaAccessories.forEach(attachAccessory);
+
+            // Anything cached that is no longer in the config has to go, otherwise
+            // it lingers in the Home app as an unresponsive accessory.
+            const stale = [...platform.cachedAccessories.entries()].filter(([uuid]) => !activeUUIDs.has(uuid));
+            if (stale.length > 0) {
+                stale.forEach(([uuid, accessory]) => {
+                    platform.log.log(`Removing accessory ${accessory.displayName}, no longer in config`);
+                    platform.cachedAccessories.delete(uuid);
+                });
+                api.unregisterPlatformAccessories(PLUGIN_NAME, PLATFORM_NAME, stale.map(([, accessory]) => accessory));
+            }
         }
 
         const findArea = (area_number) => areaAccessories.find(a => Number(a.zone_number) === Number(area_number));
@@ -408,6 +447,17 @@ function TexecomAccessory(log, config, hap) {
         }
     } catch (e) { /* no zones */ }
 
+    // What 4.3.0 computed, kept so that an install carried over from 4.3.0
+    // can be handed back the very same accessory identities. 4.3.0 hashed the
+    // number on its own, without separating areas from zones.
+    if (config["sn"]) {
+        this.legacy_sn = config["sn"];
+    } else {
+        const legacy = crypto.createHash('sha1');
+        legacy.update(this.zone_number);
+        this.legacy_sn = legacy.digest('base64');
+    }
+
     if (config["sn"]) {
         this.sn = config["sn"];
     } else {
@@ -426,7 +476,7 @@ TexecomAccessory.prototype = {
     // Builds the services on a bridged platform accessory. A cached accessory
     // keeps the services it already has, they are only added when missing, so
     // that restarting Homebridge does not disturb the accessory in HomeKit.
-    setupServices: function (hapAccessory, platform) {
+    setupServices: function (hapAccessory, platform, serialNumber) {
         const { Service, Characteristic } = this.hap;
         const me = this;
 
@@ -436,7 +486,7 @@ TexecomAccessory.prototype = {
             .setCharacteristic(Characteristic.Name, this.name)
             .setCharacteristic(Characteristic.Manufacturer, "Homebridge")
             .setCharacteristic(Characteristic.Model, `Texecom ${this.zone_type === "securitysystem" ? "Area" : "Zone"}`)
-            .setCharacteristic(Characteristic.SerialNumber, this.sn);
+            .setCharacteristic(Characteristic.SerialNumber, serialNumber || this.sn);
 
         var ServiceType, changeAction;
 

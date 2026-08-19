@@ -108,6 +108,24 @@ When an area is armed the panel reports the area and the user number, but not wh
 
 When the arm was started from HomeKit the plugin already knows what was asked for and reports that, whatever the user number. These settings only come into play for an arm that started somewhere else.
 
+### Upgrading from 4.3.0
+
+**Only relevant if you ran 4.3.0.** Skip this if you came from 4.2.8 or earlier, or are installing fresh.
+
+4.3.0 published every zone and area as a standalone accessory that had to be added to the Home app by hand. From 4.3.1 they are bridged again, which is how it worked up to 4.2.8 and means they appear on their own.
+
+The catch is that HomeKit treats a standalone accessory and a bridged one as different accessories, so any scene, button or automation built on the ones 4.3.0 published stops working when they move back onto the bridge. Nothing the plugin does can carry that across.
+
+If you set all that up under 4.3.0 and would rather keep it:
+
+```json
+"external_accessories": true
+```
+
+That republishes them exactly as 4.3.0 did, with the same identities, so everything keeps working untouched. The trade-off is that they stay outside the bridge, so a zone added later still has to be paired by hand.
+
+Leaving it off, or leaving it out entirely, gives bridged accessories.
+
 ### Per-zone Configuration
 
 This plugin is a platform plugin so you must configure each zone from your Texecom intruder alarm into your config individually.

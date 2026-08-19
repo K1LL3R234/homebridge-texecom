@@ -2,6 +2,11 @@
 
 This change log documents all release versions of homebridge-texecom
 
+### 4.3.1-beta.3 (2026-08-19)
+
+- **FEATURE** - `external_accessories` for installs that ran 4.3.0. That release published accessories outside the bridge, and HomeKit gives no way to move a standalone accessory onto a bridge without it counting as a new accessory, so the scenes, buttons and automations built on them would all have to be set up again. Turning this on republishes them the way 4.3.0 did, with the same identities, and they carry on working. Off by default, so a fresh install or one coming from 4.2.8 gets bridged accessories.
+- **TWEAK** - Switching between the two modes tidies up after itself: turning the option on removes the bridged accessories that are no longer served.
+
 ### 4.3.1-beta.2 (2026-08-19)
 
 - **FIX** - Arming or disarming areas 5 to 8 addressed the wrong areas. The area bitmask was being run through `parseInt(..., 16)` a second time, so area 5 asked the panel for areas 2, 3 and 5, area 6 for 2, 5 and 6, area 7 for 3, 6 and 7, and area 8 sent a value too large to fit the byte. Areas 1 to 4 were unaffected, their masks survive the round trip. Present since 4.2.8.
