@@ -2,6 +2,11 @@
 
 This change log documents all release versions of homebridge-texecom
 
+### 4.4.0-beta.1 (2026-08-26)
+
+- **FEATURE** - Panel clock sync. Set `time_sync_interval` to the number of hours between checks and the plugin reads the panel clock, comparing it against the machine running Homebridge, and sets it when the two have drifted apart. Anything from every hour to once every 31 days, 0 leaves the panel clock alone and is the default. The panel is also checked shortly after Homebridge connects, so a panel that lost its clock in a power cut is put right without waiting for the interval. Needs a UDL, as arming does.
+- **FIX** - Commands are written a byte at a time rather than as text. Arming or disarming area 8, or any combined area including it, sent the bitmask as two bytes because the byte the panel wanted was 0x80 and the default encoding turns anything from 128 up into a pair. The panel would have read that as a different command. Areas 1 to 7 on their own were unaffected. Present since 4.2.8.
+
 ### 4.4.0-beta.0 (2026-08-19)
 
 - **FEATURE** - Combined areas. One accessory can arm and disarm several areas at once, set up under `area_groups`. The panel addresses areas as a bitmask, so they go in a single command rather than one after another. A combined area reports armed only once every one of its areas is armed, showing as arming until then, and an alarm in any of them shows through straight away. The areas keep their own accessories, and an area can belong to more than one combined area.

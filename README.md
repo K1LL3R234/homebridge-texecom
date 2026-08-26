@@ -108,6 +108,24 @@ When an area is armed the panel reports the area and the user number, but not wh
 
 When the arm was started from HomeKit the plugin already knows what was asked for and reports that, whatever the user number. These settings only come into play for an arm that started somewhere else.
 
+### Panel Clock
+
+The panel keeps its own clock, and nothing corrects it once it drifts apart from an engineer at the keypad. This checks it against the clock on the machine running Homebridge and sets it when the two have come apart.
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `time_sync_interval` | 0 | How often to check the panel clock, in hours. `1` checks every hour, `24` once a day, `744` once every 31 days, and anything in between works. `0` turns it off and leaves the panel clock alone. |
+
+```json
+"time_sync_interval": 24
+```
+
+It is off unless you set it. A UDL is needed, the same one arming uses, because the panel asks to be logged into before it will give up its clock or take a new time.
+
+The panel is checked shortly after Homebridge connects to it as well as on the interval, so a panel that lost its clock in a power cut is put right without waiting for the next check. A difference of a minute is left alone: the panel only counts whole minutes, so a check landing either side of a minute boundary can look a minute out when it is really in step. Anything beyond that is set. The panel carries a two digit year, so it is read as being in this century.
+
+Once a day is plenty for a panel that keeps reasonable time. Checking every hour is there for a panel that drifts badly, and costs two short commands each time.
+
 ### Upgrading from 4.3.0
 
 **Only relevant if you ran 4.3.0.** Skip this if you came from 4.2.8 or earlier, or are installing fresh.

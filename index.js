@@ -56,6 +56,10 @@ class TexecomPlatform {
         this.app_users = parseUserList(config["app_users"]);
         this.default_arm_state = String(config["default_arm_state"] || "away").toLowerCase();
 
+        // How often to check the panel clock against this machine's, in hours.
+        // 0 leaves the panel clock alone.
+        this.time_sync_interval = parseSyncInterval(config["time_sync_interval"]);
+
         // Accessories restored from the Homebridge cache, keyed by UUID.
         this.cachedAccessories = new Map();
 
@@ -337,10 +341,14 @@ class TexecomPlatform {
             var connection = net.createConnection(platform.ip_port, platform.ip_address);
             connection.setNoDelay(true);
 
-            connection.on('connect', () => platform.log.log('Connected via IP'));
+            connection.on('connect', () => {
+                platform.log.log('Connected via IP');
+                platform._panelConnected();
+            });
 
             connection.on('data', function (data) {
                 platform.log.debug(`IP data received: ${data}`);
+                responseEmitter.emit('raw', data);
                 responseEmitter.emit('data', data);
                 processData(data);
             });
@@ -368,8 +376,16 @@ class TexecomPlatform {
             const sp = new SerialPort({ path: this.serial_device, baudRate: this.baud_rate });
             const parser = sp.pipe(new ReadlineParser({ delimiter: '\n' }));
 
-            sp.on("open", () => platform.log.log("Serial port opened"));
+            sp.on("open", () => {
+                platform.log.log("Serial port opened");
+                platform._panelConnected();
+            });
             sp.on("error", (err) => platform.log.error("Serial port error:", err.message));
+
+            // The parser splits on 0x0A, which the panel clock reply can carry
+            // inside it - the 10th of a month, or ten minutes past. Reading the
+            // clock works off the bytes as they arrive instead.
+            sp.on('data', (data) => responseEmitter.emit('raw', data));
 
             parser.on('data', function (data) {
                 platform.log.debug(`Serial data received: ${data}`);
@@ -385,6 +401,110 @@ class TexecomPlatform {
         } else {
             this.log.log("Must set either serial_device or ip_address in configuration.");
         }
+
+        this._startClockSync();
+    }
+
+    // ── Panel clock ──────────────────────────────────────────────────────────
+    _startClockSync() {
+        if (this.time_sync_interval <= 0) {
+            this.log.debug("Panel clock sync is off");
+            return;
+        }
+
+        if (this.udl == null) {
+            this.log.log("Panel clock sync needs a UDL. Add one to the config, or set the sync interval to 0 to turn it off.");
+            this.time_sync_interval = 0;
+            return;
+        }
+
+        this.log.log(`Checking the panel clock every ${describeInterval(this.time_sync_interval)}`);
+
+        // The next check is timed from the end of the last one rather than by a
+        // repeating interval, so a check that is slow to answer cannot have the
+        // next one land on top of it.
+        const period = this.time_sync_interval * 60 * 60 * 1000;
+        const again = () => scheduleAfter(period, () => this._syncPanelClock().then(again));
+        again();
+    }
+
+    // The panel is checked shortly after the connection comes up as well as on
+    // the interval, so a panel that lost its clock in a power cut is put right
+    // without waiting for the next check. A dropped IP connection reconnects, so
+    // this can run again; the pending check is replaced rather than stacked up.
+    _panelConnected() {
+        if (this.time_sync_interval <= 0) {
+            return;
+        }
+
+        if (this._clock_sync_pending) {
+            clearTimeout(this._clock_sync_pending);
+        }
+
+        this._clock_sync_pending = setTimeout(() => this._syncPanelClock(), 5000);
+        if (this._clock_sync_pending.unref) {
+            this._clock_sync_pending.unref();
+        }
+    }
+
+    _syncPanelClock() {
+        const platform = this;
+
+        if (this._clock_sync_running) {
+            this.log.debug("Panel clock check still running, skipping this one");
+            return Promise.resolve();
+        }
+
+        const connection = this.texecomConnection;
+        if (!connection) {
+            this.log.debug("Not connected to the panel, skipping the clock check");
+            return Promise.resolve();
+        }
+
+        this._clock_sync_running = true;
+
+        return writeCommandAndWaitForOK(connection, `W${this.udl}`)
+            .then(() => readPanelTime(connection))
+            .then(panel => {
+                const now = new Date();
+                const drift = clockDriftMinutes(panel, now);
+
+                platform._clock_sync_failing = false;
+
+                if (Math.abs(drift) <= CLOCK_TOLERANCE_MINUTES) {
+                    platform.log.debug(`Panel clock reads ${formatPanelTime(panel)}, in step`);
+                    return;
+                }
+
+                if (shouldDeferClockSet(now)) {
+                    platform.log.debug(`Panel clock is ${describeDrift(drift)}, waiting a minute to set it: 47 minutes past would put a framing character inside the command`);
+                    scheduleAfter(61000, () => platform._syncPanelClock());
+                    return;
+                }
+
+                platform.log.log(`Panel clock reads ${formatPanelTime(panel)}, ${describeDrift(drift)}. Setting it to ${formatPanelTime(localPanelTime(now))}`);
+
+                // Logging in again rather than leaning on the session opened for
+                // the read, which is what the panel asks for and costs one
+                // command at most once an interval.
+                return writeCommandAndWaitForOK(connection, `W${platform.udl}`)
+                    .then(() => writeCommandAndWaitForOK(connection, panelTimeCommand(now)))
+                    .then(() => platform.log.log("Panel clock set"));
+            })
+            .catch(err => {
+                // Said once when it starts going wrong rather than on every
+                // pass, so a panel that cannot be reached does not fill the log
+                // with the same line for as long as it is left running.
+                if (platform._clock_sync_failing) {
+                    platform.log.debug(`Panel clock check failed: ${err.message}`);
+                } else {
+                    platform._clock_sync_failing = true;
+                    platform.log.log(`Panel clock check failed: ${err.message}. Further failures are only logged with debug on.`);
+                }
+            })
+            .then(() => {
+                platform._clock_sync_running = false;
+            });
     }
 }
 
@@ -790,7 +910,7 @@ function writeCommandAndWaitForOK(connection, command, retryCount = 1) {
             }
         }, 2000);
 
-        connection.write(`\\${command}/`, function (err) {
+        connection.write(frameCommand(command), function (err) {
             if (err) {
                 settle(reject, err);
             }
@@ -816,4 +936,221 @@ function areaMask(area_numbers) {
 
 function is_armed(area_number) {
     return areas_armed.some(v => v === area_number);
+}
+
+function toBuffer(data) {
+    return Buffer.isBuffer(data) ? data : Buffer.from(String(data), "latin1");
+}
+
+// Wraps a command in the \ and / the panel expects. Commands are written as
+// latin1 so that a byte the command carries goes out as that one byte: the area
+// bitmask and the date and time are numbers rather than text, and the default
+// encoding would send anything from 128 up as two bytes.
+function frameCommand(command) {
+    return Buffer.concat([Buffer.from("\\", "latin1"), toBuffer(command), Buffer.from("/", "latin1")]);
+}
+
+// ─── Panel clock ──────────────────────────────────────────────────────────────
+// The panel keeps its own clock and drifts, and nothing corrects it apart from
+// an engineer at the keypad. When time_sync_interval is set the plugin reads the
+// panel clock on that interval and writes the current time back when the two
+// have come apart. Both commands need a UDL login first, exactly as arming does.
+//
+//   read : \T?/            → B1..B5 0x0D 0x0A, or ERROR 0x0D 0x0A
+//   set  : \T B1..B5/      → OK 0x0D 0x0A, or ERROR 0x0D 0x0A
+//
+// B1..B5 are day, month, two digit year, hours and minutes, sent as raw bytes
+// rather than as text.
+
+// The panel clock only counts whole minutes, so a read that lands either side of
+// a minute boundary can look a minute out when it is in step. Anything beyond
+// that is real drift.
+const CLOCK_TOLERANCE_MINUTES = 1;
+
+// The longest an interval can be, in hours: 31 days.
+const MAX_SYNC_INTERVAL_HOURS = 744;
+
+// A timer cannot be given a delay beyond this, roughly 24.8 days. Anything
+// larger wraps round and fires immediately, so a longer wait is walked down in
+// steps rather than asked for in one go.
+const MAX_TIMER_MS = 2147483647;
+
+// Hours, 0 (or anything unusable) turns the sync off, capped at 31 days.
+function parseSyncInterval(value) {
+    if (value === null || value === undefined || value === "") {
+        return 0;
+    }
+    const hours = Math.round(Number(value));
+    if (!Number.isFinite(hours) || hours <= 0) {
+        return 0;
+    }
+    return Math.min(hours, MAX_SYNC_INTERVAL_HOURS);
+}
+
+function describeInterval(hours) {
+    if (hours >= 24 && hours % 24 === 0) {
+        const days = hours / 24;
+        return `${days} day${days === 1 ? "" : "s"}`;
+    }
+    return `${hours} hour${hours === 1 ? "" : "s"}`;
+}
+
+// setTimeout with a delay a timer can actually hold, however long the wait.
+function scheduleAfter(delayMs, run) {
+    const step = Math.min(delayMs, MAX_TIMER_MS);
+    const timer = setTimeout(() => {
+        const remaining = delayMs - step;
+        if (remaining > 0) {
+            scheduleAfter(remaining, run);
+        } else {
+            run();
+        }
+    }, step);
+
+    if (timer.unref) {
+        timer.unref();
+    }
+    return timer;
+}
+
+// Reads the panel clock. The reply is seven raw bytes, and the panel can report
+// a zone or area at any moment, so the answer is picked out of whatever arrived
+// rather than assumed to be the next thing on the wire.
+function readPanelTime(connection, retryCount = 1) {
+    return new Promise((resolve, reject) => {
+        var buffer = Buffer.alloc(0);
+
+        function settle(fn, arg) {
+            clearTimeout(timer);
+            responseEmitter.removeListener('raw', handleRaw);
+            fn(arg);
+        }
+
+        function handleRaw(data) {
+            buffer = Buffer.concat([buffer, toBuffer(data)]);
+
+            // Only the tail can hold the reply, the rest is panel chatter that
+            // arrived while we were waiting.
+            if (buffer.length > 64) {
+                buffer = buffer.subarray(buffer.length - 64);
+            }
+
+            if (buffer.includes("ERROR")) {
+                settle(reject, new Error("the panel refused the request, check the UDL"));
+                return;
+            }
+
+            const reply = findPanelTimeReply(buffer);
+            if (reply) {
+                settle(resolve, reply);
+            }
+        }
+
+        responseEmitter.on('raw', handleRaw);
+
+        const timer = setTimeout(() => {
+            responseEmitter.removeListener('raw', handleRaw);
+            if (retryCount > 0) {
+                readPanelTime(connection, retryCount - 1).then(resolve).catch(reject);
+            } else {
+                reject(new Error("timed out reading the panel clock"));
+            }
+        }, 2000);
+
+        connection.write(frameCommand("T?"), function (err) {
+            if (err) {
+                settle(reject, err);
+            }
+        });
+    });
+}
+
+// Finds the seven byte reply in the bytes read back. The terminator on its own
+// is not enough to go on: a day of the 13th and a month of October are 0x0D and
+// 0x0A, so a reply can carry what looks like a terminator inside it. Every field
+// is range checked as well, which is also what keeps a zone or area message from
+// being mistaken for a time - those are text, and no printable character is a
+// month between 1 and 12.
+function findPanelTimeReply(buffer) {
+    for (var i = 0; i + 7 <= buffer.length; i++) {
+        if (buffer[i + 5] !== 0x0D || buffer[i + 6] !== 0x0A) {
+            continue;
+        }
+
+        const reply = {
+            day: buffer[i],
+            month: buffer[i + 1],
+            year: buffer[i + 2],
+            hours: buffer[i + 3],
+            minutes: buffer[i + 4]
+        };
+
+        if (isPlausiblePanelTime(reply)) {
+            return reply;
+        }
+    }
+    return null;
+}
+
+function isPlausiblePanelTime(time) {
+    return time.day >= 1 && time.day <= 31
+        && time.month >= 1 && time.month <= 12
+        && time.year <= 99
+        && time.hours <= 23
+        && time.minutes <= 59;
+}
+
+// The panel carries a two digit year, so it is read against the century we are
+// in. A panel that has lost its clock altogether reads as wildly out and is set.
+function panelTimeToDate(time, now) {
+    const century = Math.floor(now.getFullYear() / 100) * 100;
+    return new Date(century + time.year, time.month - 1, time.day, time.hours, time.minutes, 0, 0);
+}
+
+function localPanelTime(now) {
+    return {
+        day: now.getDate(),
+        month: now.getMonth() + 1,
+        year: now.getFullYear() % 100,
+        hours: now.getHours(),
+        minutes: now.getMinutes()
+    };
+}
+
+// How far the panel is ahead of us, in whole minutes. Negative means behind.
+function clockDriftMinutes(time, now) {
+    const panel = panelTimeToDate(time, now);
+    const local = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), now.getMinutes(), 0, 0);
+    return Math.round((panel.getTime() - local.getTime()) / 60000);
+}
+
+function formatPanelTime(time) {
+    return `${zpad(time.day, 2)}/${zpad(time.month, 2)}/${zpad(time.year, 2)} ${zpad(time.hours, 2)}:${zpad(time.minutes, 2)}`;
+}
+
+function describeDrift(minutes) {
+    const ahead = minutes > 0;
+    const size = Math.abs(minutes);
+    const amount = size < 120 ? `${size} minute${size === 1 ? "" : "s"}`
+        : size < 2880 ? `${Math.round(size / 60)} hours`
+            : `${Math.round(size / 1440)} days`;
+    return `${amount} ${ahead ? "ahead" : "behind"}`;
+}
+
+// Day, month, two digit year, hours and minutes as raw bytes, all of which are
+// below 0x80 so they survive being written out.
+function panelTimeCommand(now) {
+    const time = localPanelTime(now);
+    return Buffer.from([0x54, time.day, time.month, time.year, time.hours, time.minutes]);
+}
+
+// 0x2F is the / that closes a command and 0x5C the \ that opens one, so a time
+// carrying either puts a framing character inside the command. A panel that
+// counts the five bytes it is expecting reads that correctly, one that scans for
+// the / instead would cut the command short, and there is no way to tell which
+// from here. Of the five, only the minutes can land on one - 47 minutes past -
+// and a minute's wait clears it. The year can too, in 2047 and 2092, and waiting
+// cannot help with that, so the command goes as it is.
+function shouldDeferClockSet(now) {
+    return localPanelTime(now).minutes === 0x2F;
 }

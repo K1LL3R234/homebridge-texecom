@@ -46,6 +46,14 @@
                 "maxLength": 6,
                 "title": "UDL"
             },
+            "time_sync_interval": {
+                "type": "integer",
+                "default": 0,
+                "minimum": 0,
+                "maximum": 744,
+                "title": "Panel Clock Sync (hours)",
+                "description": "How often to check the panel clock against the clock on this machine, in hours, and set it if it has drifted. 1 checks every hour, 24 once a day, 744 once every 31 days. 0 turns it off and leaves the panel clock alone. Needs a UDL."
+            },
             "remote_users": {
                 "type": "array",
                 "title": "Remote / Keyfob Users",
