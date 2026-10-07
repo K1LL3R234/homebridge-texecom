@@ -2,6 +2,22 @@
 
 This change log documents all release versions of homebridge-texecom
 
+### 4.4.0 (2026-10-07)
+
+Rolls up the 4.3.1 and 4.4.0 betas below. Coming from 4.2.8, existing accessories carry over with their rooms, names and automations. Coming from 4.3.0, turn on `external_accessories` to keep the accessories that release published outside the bridge, see 4.3.1-beta.3.
+
+- **FEATURE** - Combined areas. One accessory can arm and disarm several areas at once, set up under `area_groups`.
+- **FEATURE** - Panel clock sync. `time_sync_interval` sets how often, in hours, the panel clock is checked against the machine running Homebridge and corrected. Off by default.
+- **FEATURE** - `external_accessories` lets installs that ran 4.3.0 keep their accessories.
+- **FEATURE** - How an arm is reported to HomeKit is configurable via `remote_users`, `app_users` and `default_arm_state` (#25).
+- **FIX** - Accessories are bridged again, as in 4.2.8 and earlier, and are cached across restarts.
+- **FIX** - Arming or disarming areas 5 to 8 addressed the wrong areas, and area 8 sent a malformed command. Present since 4.2.8.
+- **FIX** - The first arm or disarm from a HomeKit button is no longer ignored (#26).
+- **FIX** - A full arm no longer changes to Night in the Home app a minute later (#25).
+- **FIX** - The arm/disarm command is retried once if the panel ignores it, and the retry timer is cleared once the panel answers.
+- **FIX** - Areas and zones sharing a number no longer share a serial number.
+- **TWEAK** - Runs on Homebridge 1.x again as well as 2.x.
+
 ### 4.4.0-beta.1 (2026-08-26)
 
 - **FEATURE** - Panel clock sync. Set `time_sync_interval` to the number of hours between checks and the plugin reads the panel clock, comparing it against the machine running Homebridge, and sets it when the two have drifted apart. Anything from every hour to once every 31 days, 0 leaves the panel clock alone and is the default. The panel is also checked shortly after Homebridge connects, so a panel that lost its clock in a power cut is put right without waiting for the interval. Needs a UDL, as arming does.
