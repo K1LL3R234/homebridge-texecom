@@ -108,9 +108,15 @@ When an area is armed the panel reports the area and the user number, but not wh
 
 When the arm was started from HomeKit the plugin already knows what was asked for and reports that, whatever the user number. These settings only come into play for an arm that started somewhere else.
 
+### Part arms
+
+Night and Home both send Part Arm 1. Check what your installer programmed for Part Arm 1 before using them: on a tested Premier Elite 24 (V6.05.03), a part arm with nothing programmed armed **every zone**, the same as a full arm.
+
+Further detail on how the panel behaves: [the protocol notes kept by ha-texecom](https://github.com/metaljay/ha-texecom/blob/main/docs/development/protocol.md).
+
 ### Panel Clock
 
-The panel keeps its own clock, and nothing corrects it once it drifts apart from an engineer at the keypad. This checks it against the clock on the machine running Homebridge and sets it when the two have come apart.
+The panel keeps its own clock. Unless its SmartCom is set up for the Texecom Cloud (which corrects it by NTP, according to Texecom's SmartCom installation guide), nothing corrects it apart from an engineer at the keypad, and it drifts (on one panel, from 7 s ahead to 43 s behind in two days). A total power loss (mains and battery) resets it, to 31 October 2023 on a V6.05.03 panel. This checks it against the clock on the machine running Homebridge and sets it when the two have come apart.
 
 | Key | Default | Description |
 | --- | --- | --- |
@@ -122,7 +128,7 @@ The panel keeps its own clock, and nothing corrects it once it drifts apart from
 
 It is off unless you set it. A UDL is needed, the same one arming uses, because the panel asks to be logged into before it will give up its clock or take a new time.
 
-The panel is checked shortly after Homebridge connects to it as well as on the interval, so a panel that lost its clock in a power cut is put right without waiting for the next check. A difference of a minute is left alone: the panel only counts whole minutes, so a check landing either side of a minute boundary can look a minute out when it is really in step. Anything beyond that is set. The panel carries a two digit year, so it is read as being in this century.
+The panel is checked shortly after Homebridge connects to it as well as on the interval, so a panel that lost its clock in a power cut is put right without waiting for the next check. A difference of a minute is left alone: the clock command this plugin uses (`\T`) gives whole minutes only (the panel itself keeps seconds), so a check landing either side of a minute boundary can look a minute out when it is really in step. It also leaves a clock that the Texecom Cloud keeps right alone. Anything beyond that is set. The panel carries a two digit year, so it is read as being in this century.
 
 Once a day is plenty for a panel that keeps reasonable time. Checking every hour is there for a panel that drifts badly, and costs two short commands each time.
 
