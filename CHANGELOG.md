@@ -2,6 +2,10 @@
 
 This change log documents all release versions of homebridge-texecom
 
+### 4.4.1-beta.1 (2026-10-22)
+
+- **FEATURE** - `target_states` chooses which arm modes the Home app offers, e.g. `["away", "off"]` for a household that only arms fully, which also lets "Hey Siri, turn on the alarm" go straight to Away (#30). Set it for every area, or on an area or combined area for that one alone. Off is always offered. An arm in a mode that is not offered, at the keypad say, shows as Away, or as the armed mode that is offered.
+
 ### 4.4.1-beta.0 (2026-10-22)
 
 - **FIX** - Panel messages were lost over IP when more than one arrived together. Each read from the network was taken as a single message, so anything after the first was dropped, and a lost keypad disarm left HomeKit thinking the area was armed and raising false alarms. The network connection is now split into lines, as the serial connection already was.
