@@ -2,6 +2,25 @@
 
 This change log documents all release versions of homebridge-texecom
 
+### 4.4.1-beta.0 (2026-10-22)
+
+- **FIX** - Panel messages were lost over IP when more than one arrived together. Each read from the network was taken as a single message, so anything after the first was dropped, and a lost keypad disarm left HomeKit thinking the area was armed and raising false alarms. The network connection is now split into lines, as the serial connection already was.
+- **FIX** - Walking in through the entry route of an armed area raised an alarm in HomeKit. Zones going active during the panel's entry delay are now left to the panel, which reports a real alarm itself.
+- **FIX** - Areas showed as Disarmed after every Homebridge restart until the panel next reported them. The last known state is now kept in the accessory cache and restored. Not available with `external_accessories`.
+- **FIX** - Commands sent at the same time, such as a scene arming two areas, or an arm during a panel clock check, could be interleaved, with each taking the other's OK. They now go one at a time.
+- **FIX** - The panel clock sync set the panel an hour out when Homebridge runs on UTC, as it does in Docker unless `TZ` is set. The new `time_zone` setting gives the panel's time zone. Without it, a machine on UTC leaves a whole-hours difference alone with a warning.
+- **FIX** - Errors were only logged with debug turned on. Logging now goes through the Homebridge logger, and debug output shows as normal lines when the plugin's debug option is on.
+- **FIX** - An area without `area_type` was published as a motion sensor. Areas are always security systems now.
+- **FIX** - A zone that went clear, active and clear again within its dwell time could be cleared while active, because the earlier dwell timer was left running.
+- **FIX** - A serial adapter missing at start-up, or unplugged later, was never opened again. It is retried every 10 seconds, as the IP connection already was.
+- **FIX** - The UDL is saved as text, so a UDL starting with 0 keeps it. Existing configs with a number still work.
+- **FIX** - A message the plugin cannot handle is logged instead of being able to stop Homebridge.
+- **TWEAK** - TCP keep-alive on the IP connection, so a connection dropped without notice is found, and the connection is closed when Homebridge shuts down.
+- **TWEAK** - A failed arm or disarm shows as No Response in the Home app.
+- **TWEAK** - The clock sync interval is a number box in the settings page instead of a slider with no visible value.
+- **TWEAK** - Manufacturer shows as Texecom, and the settings page no longer calls the plugin official.
+- **TWEAK** - Removed the `string` (which carries a security advisory with no fix), `zpad`, `debug` and `@serialport/parser-readline` dependencies.
+
 ### 4.4.0 (2026-10-07)
 
 Rolls up the 4.3.1 and 4.4.0 betas below. Coming from 4.2.8, existing accessories carry over with their rooms, names and automations. Coming from 4.3.0, turn on `external_accessories` to keep the accessories that release published outside the bridge, see 4.3.1-beta.3.
