@@ -70,6 +70,10 @@ class TexecomPlatform {
         this.app_users = parseUserList(config["app_users"]);
         this.default_arm_state = String(config["default_arm_state"] || "away").toLowerCase();
 
+        // The arm modes offered in the Home app, for every area that does not
+        // set its own. Unset offers them all.
+        this.target_states = config["target_states"];
+
         // How often to check the panel clock against this machine's, in hours.
         // 0 leaves the panel clock alone.
         this.time_sync_interval = parseSyncInterval(config["time_sync_interval"]);
@@ -722,6 +726,54 @@ function currentToTargetState(Characteristic, currentState) {
     }
 }
 
+// The arm modes to offer in the Home app, as SecuritySystemTargetState values,
+// from names such as ["away", "off"]. Off is always offered. Unset, or nothing
+// usable, offers every mode.
+const TARGET_STATE_NAMES = {
+    away: "AWAY_ARM",
+    home: "STAY_ARM",
+    stay: "STAY_ARM",
+    night: "NIGHT_ARM",
+    off: "DISARM",
+    disarm: "DISARM"
+};
+
+function parseTargetStates(Characteristic, value, log, name) {
+    const Target = Characteristic.SecuritySystemTargetState;
+    const all = [Target.STAY_ARM, Target.AWAY_ARM, Target.NIGHT_ARM, Target.DISARM];
+
+    if (value === null || value === undefined || value === "") {
+        return all;
+    }
+
+    const names = Array.isArray(value) ? value : String(value).split(",");
+    const offered = new Set([Target.DISARM]);
+    names.forEach(n => {
+        const key = TARGET_STATE_NAMES[String(n).trim().toLowerCase()];
+        if (key) {
+            offered.add(Target[key]);
+        } else {
+            log.error(`${name}: unknown arm mode "${n}" in target_states, use away, home, night or off`);
+        }
+    });
+
+    if (offered.size === 1) {
+        log.error(`${name}: target_states offers no way to arm, offering every mode instead`);
+        return all;
+    }
+    return all.filter(v => offered.has(v));
+}
+
+// The armed mode to show for an arm in a mode that is not offered: away if it
+// is there, otherwise the first armed mode that is.
+function offeredArmState(Characteristic, offered) {
+    const Target = Characteristic.SecuritySystemTargetState;
+    if (offered.includes(Target.AWAY_ARM)) {
+        return Target.AWAY_ARM;
+    }
+    return offered.find(v => v !== Target.DISARM);
+}
+
 function parseUserList(value) {
     if (value === null || value === undefined || value === "") {
         return [];
@@ -753,6 +805,9 @@ function TexecomAccessory(log, config, hap, kind) {
 
     // The state an area was in when Homebridge last stopped, if it is known.
     this.restored_state = null;
+
+    // The arm modes this area offers in the Home app, if it sets its own.
+    this.target_states = config["target_states"];
 
     if (this.kind === "group") {
         // A combined area is addressed as several area numbers at once.
@@ -886,7 +941,29 @@ TexecomAccessory.prototype = {
                 break;
 
             case "securitysystem":
+                // Only the arm modes asked for are offered in the Home app.
+                // Off is always there, an alarm that cannot be turned off from
+                // HomeKit is no use to anyone.
+                const offered = parseTargetStates(Characteristic,
+                    this.target_states != null ? this.target_states : (platform && platform.target_states),
+                    me.log, me.name);
+                // Off first, so the value it holds is in the new list. The real
+                // state follows once it is known, below.
+                service.getCharacteristic(Characteristic.SecuritySystemTargetState)
+                    .updateValue(Characteristic.SecuritySystemTargetState.DISARM)
+                    .setProps({ validValues: offered });
+
                 changeAction = function (newState) {
+                    // An arm in a mode the Home app does not offer, from the
+                    // keypad say, is shown as the armed mode it does offer.
+                    // HomeKit will not take a target state outside the list.
+                    const asked = currentToTargetState(Characteristic, newState);
+                    if (asked != null && !offered.includes(asked)) {
+                        const shown = offeredArmState(Characteristic, offered);
+                        me.log.debug(`${me.name} armed in a mode the Home app does not offer, showing it as ${shown}`);
+                        newState = targetToCurrentState(Characteristic, shown);
+                    }
+
                     const targetState = currentToTargetState(Characteristic, newState);
 
                     // updateValue, never setValue: setValue would fire the set
@@ -927,7 +1004,12 @@ TexecomAccessory.prototype = {
                         return new Promise((resolve, reject) => {
                             // platform reference is injected above
                             const platform = me._platform;
-                            if (platform && platform.udl != null) {
+                            if (!offered.includes(value)) {
+                                me.log.error(`${me.name}: arm mode ${value} is not one target_states offers, ignoring it`);
+                                reject(hap.HapStatusError
+                                    ? new hap.HapStatusError(hap.HAPStatus.INVALID_VALUE_IN_REQUEST)
+                                    : new Error("Arm mode not offered"));
+                            } else if (platform && platform.udl != null) {
                                 areaTargetSecurityStateSet(platform, area, service, value,
                                     (err) => err ? reject(failure()) : resolve());
                             } else {

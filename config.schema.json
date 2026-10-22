@@ -88,6 +88,16 @@
                     "stay"
                 ]
             },
+            "target_states": {
+                "type": "array",
+                "title": "Home App Arm Modes",
+                "description": "The modes offered in the Home app for every area, e.g. away and off for a house that only ever uses a full arm. Off is always offered. Leave empty to offer them all.",
+                "uniqueItems": true,
+                "items": {
+                    "type": "string",
+                    "enum": ["away", "home", "night", "off"]
+                }
+            },
             "zones": {
                 "type": "array",
                 "title": "Zones",
@@ -158,6 +168,16 @@
                                 "type": "integer"
                             },
                             "title": "Zones under Area"
+                        },
+                        "target_states": {
+                            "type": "array",
+                            "title": "Home App Arm Modes",
+                            "description": "The modes offered in the Home app for this one, if different from the setting above. Off is always offered.",
+                            "uniqueItems": true,
+                            "items": {
+                                "type": "string",
+                                "enum": ["away", "home", "night", "off"]
+                            }
                         }
                     },
                     "required": [
@@ -200,6 +220,16 @@
                             "type": "integer",
                             "minimum": 0,
                             "title": "Dwell Time"
+                        },
+                        "target_states": {
+                            "type": "array",
+                            "title": "Home App Arm Modes",
+                            "description": "The modes offered in the Home app for this one, if different from the setting above. Off is always offered.",
+                            "uniqueItems": true,
+                            "items": {
+                                "type": "string",
+                                "enum": ["away", "home", "night", "off"]
+                            }
                         }
                     },
                     "required": [

@@ -108,6 +108,22 @@ When an area is armed the panel reports the area and the user number, but not wh
 
 When the arm was started from HomeKit the plugin already knows what was asked for and reports that, whatever the user number. These settings only come into play for an arm that started somewhere else.
 
+### Home App Arm Modes
+
+The Home app offers Home, Away, Night and Off for every area. A household that only ever arms fully can offer just Away and Off, which also lets "Hey Siri, turn on the alarm" go straight to Away.
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `target_states` | All of them | The modes to offer, from `away`, `home`, `night` and `off`. Off is always offered. Set it at the top level for every area, or on an area or combined area for that one alone. |
+
+```json
+"target_states": ["away", "off"]
+```
+
+Night and Home both send the panel a part arm, so offering only the modes your panel is set up for avoids arming in a way you did not mean. An area armed in a mode that is not offered, at the keypad say, shows in the Home app as Away, or as the armed mode that is offered if Away is not.
+
+If the Home app still shows the old buttons after a change, close and reopen it. Some versions of iOS hold on to them for an accessory they already know.
+
 ### Panel Clock
 
 The panel keeps its own clock, and nothing corrects it once it drifts apart from an engineer at the keypad. This checks it against the clock on the machine running Homebridge and sets it when the two have come apart.
