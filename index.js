@@ -1,8 +1,6 @@
-var debug = require("debug")("TexecomAccessory");
-var zpad = require("zpad");
-var S = require('string');
 var crypto = require("crypto");
 var net = require('net');
+const { SerialPort, ReadlineParser } = require('serialport');
 
 const EventEmitter = require('events');
 class ResponseEmitter extends EventEmitter { }
@@ -16,6 +14,18 @@ const PLUGIN_NAME = "homebridge-texecom-full";
 const PLATFORM_NAME = "Texecom";
 
 var areas_armed = [];
+
+// Areas the panel has started an entry delay for. Someone walking in through
+// the entry route sets zones off while the area is armed, which is exactly
+// what the panel's entry delay is for, so those zones are not an alarm. The
+// panel says when it is one, with "L.
+var areas_in_entry = new Set();
+
+// How long a command, or the login before it, is given to be answered.
+const COMMAND_TIMEOUT_MS = 2000;
+
+// How long to wait before trying the panel again after losing it.
+const RECONNECT_DELAY_MS = 10000;
 
 // ─── Homebridge entry point ─────────────────────────────────────────────────
 module.exports = (api) => {
@@ -35,7 +45,11 @@ class TexecomPlatform {
         this.areas = config["areas"] || [];
         this.ip_address = config["ip_address"];
         this.ip_port = config["ip_port"];
-        this.udl = config["udl"];
+
+        // Held as text so that a UDL starting with 0 keeps it. Older configs
+        // saved it as a number, which still works for any UDL that did not.
+        this.udl = (config["udl"] === null || config["udl"] === undefined || String(config["udl"]).trim() === "")
+            ? null : String(config["udl"]).trim();
 
         // 4.3.0 published every accessory outside the bridge, which meant
         // pairing each one by hand in the Home app. They are bridged again by
@@ -60,12 +74,52 @@ class TexecomPlatform {
         // 0 leaves the panel clock alone.
         this.time_sync_interval = parseSyncInterval(config["time_sync_interval"]);
 
+        // The time zone the panel keeps its clock in. Left unset, the clock on
+        // this machine is taken to be in the same zone.
+        this.time_zone = parseTimeZone(config["time_zone"], this.log);
+
         // Accessories restored from the Homebridge cache, keyed by UUID.
         this.cachedAccessories = new Map();
 
         this.api.on('didFinishLaunching', () => {
             this._setupAccessories();
         });
+
+        this.api.on('shutdown', () => {
+            this._shutDown();
+        });
+    }
+
+    _shutDown() {
+        this._shutting_down = true;
+
+        if (this._clock_sync_pending) {
+            clearTimeout(this._clock_sync_pending);
+        }
+        if (this._reconnect_timer) {
+            clearTimeout(this._reconnect_timer);
+        }
+
+        const connection = this.texecomConnection;
+        if (!connection) {
+            return;
+        }
+        if (typeof connection.destroy === "function") {
+            connection.destroy();
+        } else if (connection.isOpen) {
+            connection.close();
+        }
+    }
+
+    // One pending reconnect at a time, and none once Homebridge is shutting down.
+    _scheduleReconnect(connect) {
+        if (this._shutting_down || this._reconnect_timer) {
+            return;
+        }
+        this._reconnect_timer = setTimeout(() => {
+            this._reconnect_timer = null;
+            connect();
+        }, RECONNECT_DELAY_MS);
     }
 
     // Called once for every accessory Homebridge has cached for this platform,
@@ -219,17 +273,45 @@ class TexecomPlatform {
 
         const findArea = (area_number) => areaAccessories.find(a => Number(a.zone_number) === Number(area_number));
 
+        // Pick up where the areas were before Homebridge restarted, rather than
+        // showing them all as disarmed until the panel next says something.
+        areaAccessories.forEach(acc => {
+            if (acc.restored_state == null) {
+                return;
+            }
+            const area_number = Number(acc.zone_number);
+            areaStates.set(area_number, acc.restored_state);
+            if (acc.restored_state === hap.Characteristic.SecuritySystemCurrentState.AWAY_ARM) {
+                areas_armed.push(pad(area_number, 3));
+            }
+        });
+        refreshGroups();
+
         // ── Data processing ──────────────────────────────────────────────────
+        // One panel message per call. A message the plugin trips over is
+        // logged and dropped, it must not take Homebridge down with it.
         function processData(raw) {
-            const data = String(raw).trim();
+            try {
+                processMessage(String(raw).trim());
+            } catch (err) {
+                platform.log.error(`Could not process message from Texecom "${String(raw).trim()}": ${err.message}`);
+            }
+        }
+
+        function processMessage(data) {
             if (!data) {
                 return;
             }
 
-            if (S(data).startsWith('"Z')) {
-                var zone_data = Number(S(S(data).between('Z')).left(4).s);
-                var updated_zone = Number(S(S(data).between('Z')).left(3).s);
-                var zone_active = S(zone_data).endsWith('1');
+            if (data.startsWith('"Z')) {
+                // "Zzzzs - zzz the zone, s its state: 0 secure, 1 active.
+                const parsed = /^"Z(\d{3})(\d)/.exec(data);
+                if (!parsed) {
+                    platform.log.debug(`Malformed zone message from Texecom: ${data}`);
+                    return;
+                }
+                var updated_zone = Number(parsed[1]);
+                var zone_active = parsed[2] === '1';
 
                 platform.log.debug(`Zone update received for zone ${updated_zone} active: ${zone_active}`);
 
@@ -240,26 +322,36 @@ class TexecomPlatform {
 
                         if (zone_active) {
                             for (var a = 0; a < areaCount; a++) {
-                                try {
-                                    areaAccessories[a].zones.forEach(zone => {
-                                        if (zone == zpad(updated_zone, 3) && is_armed(areaAccessories[a].zone_number)) {
-                                            var stateValue = hap.Characteristic.SecuritySystemCurrentState.ALARM_TRIGGERED;
-                                            platform.log.log(`Area ${areaAccessories[a].zone_number} manual triggered`);
-                                            areaAccessories[a].changeHandler(stateValue);
-                                            areaStates.set(Number(areaAccessories[a].zone_number), stateValue);
-                                            refreshGroups();
-                                        }
-                                    });
-                                } catch (e) {
-                                    console.debug(`Error processing zones for area ${a}: Please add zones under area.`);
+                                const area_number = areaAccessories[a].zone_number;
+                                if (!areaAccessories[a].zones.includes(pad(updated_zone, 3)) || !is_armed(area_number)) {
+                                    continue;
                                 }
+                                if (areas_in_entry.has(Number(area_number))) {
+                                    platform.log.debug(`Zone ${updated_zone} active during the entry delay for area ${area_number}, leaving it to the panel`);
+                                    continue;
+                                }
+                                var stateValue = hap.Characteristic.SecuritySystemCurrentState.ALARM_TRIGGERED;
+                                platform.log.log(`Area ${area_number} manual triggered`);
+                                areaAccessories[a].changeHandler(stateValue);
+                                areaStates.set(Number(area_number), stateValue);
+                                refreshGroups();
                             }
                         }
                         break;
                     }
                 }
 
-            } else if (S(data).startsWith('"A') || S(data).startsWith('"D') || S(data).startsWith('"L')) {
+            } else if (data.startsWith('"E')) {
+                const parsed = /^"E(\d{3})/.exec(data);
+                if (!parsed) {
+                    platform.log.debug(`Malformed entry message from Texecom: ${data}`);
+                    return;
+                }
+                const updated_area = Number(parsed[1]);
+                areas_in_entry.add(updated_area);
+                platform.log.log(`Area ${updated_area} entry delay started`);
+
+            } else if (data.startsWith('"A') || data.startsWith('"D') || data.startsWith('"L')) {
                 const Characteristic = hap.Characteristic;
 
                 // "Saaauu - S is the status letter, aaa the area, uu the user.
@@ -278,6 +370,9 @@ class TexecomPlatform {
                 const area = findArea(updated_area);
                 var stateValue;
 
+                // Whatever happens next, the entry delay is over.
+                areas_in_entry.delete(updated_area);
+
                 switch (status) {
                     case "L":
                         stateValue = Characteristic.SecuritySystemCurrentState.ALARM_TRIGGERED;
@@ -287,7 +382,7 @@ class TexecomPlatform {
                     case "D":
                         stateValue = Characteristic.SecuritySystemCurrentState.DISARMED;
                         platform.log.log(`Area ${updated_area} disarmed by User ${user}`);
-                        areas_armed = areas_armed.filter(v => v !== zpad(updated_area, 3));
+                        areas_armed = areas_armed.filter(v => v !== pad(updated_area, 3));
                         // The area is disarmed, so whatever we last asked the
                         // panel for no longer tells us anything about it.
                         if (area) {
@@ -307,12 +402,11 @@ class TexecomPlatform {
                         }
 
                         if (stateValue == Characteristic.SecuritySystemCurrentState.AWAY_ARM) {
-                            const idx = areas_armed.findIndex(v => v === null || v === undefined);
-                            if (idx !== -1) {
-                                areas_armed[idx] = zpad(updated_area, 3);
-                            } else {
-                                areas_armed.push(zpad(updated_area, 3));
+                            if (!is_armed(pad(updated_area, 3))) {
+                                areas_armed.push(pad(updated_area, 3));
                             }
+                        } else {
+                            areas_armed = areas_armed.filter(v => v !== pad(updated_area, 3));
                         }
                         break;
 
@@ -330,8 +424,27 @@ class TexecomPlatform {
                 refreshGroups();
 
             } else {
-                platform.log.debug(`Unknown string from Texecom: ${S(data)}`);
+                platform.log.debug(`Unknown string from Texecom: ${data}`);
             }
+        }
+
+        // Serial and IP alike hand over a stream of bytes with no regard for
+        // where one message ends and the next begins: one read can hold half a
+        // message, or several. The panel ends every message with CR LF, so the
+        // stream is split into lines before anything looks at it.
+        //
+        // The line splitter cuts on 0x0A, which the panel clock reply can carry
+        // inside it - the 10th of a month, or ten minutes past. Reading the
+        // clock works off the bytes as they arrive instead.
+        function readMessages(stream, source) {
+            stream.on('data', (data) => responseEmitter.emit('raw', data));
+
+            const lines = stream.pipe(new ReadlineParser({ delimiter: '\n' }));
+            lines.on('data', function (line) {
+                platform.log.debug(`${source} data received: ${line}`);
+                responseEmitter.emit('data', line);
+                processData(line);
+            });
         }
 
         // ── IP connection with auto-reconnect ────────────────────────────────
@@ -341,25 +454,27 @@ class TexecomPlatform {
             var connection = net.createConnection(platform.ip_port, platform.ip_address);
             connection.setNoDelay(true);
 
+            // A connection dropped somewhere along the way, with nothing sent to
+            // say so, would otherwise look open for ever.
+            connection.setKeepAlive(true, 30000);
+
             connection.on('connect', () => {
                 platform.log.log('Connected via IP');
                 platform._panelConnected();
             });
 
-            connection.on('data', function (data) {
-                platform.log.debug(`IP data received: ${data}`);
-                responseEmitter.emit('raw', data);
-                responseEmitter.emit('data', data);
-                processData(data);
-            });
+            readMessages(connection, 'IP');
 
             connection.on('error', (err) => {
                 platform.log.error('IP connection error:', err.message);
             });
 
             connection.on('close', () => {
-                platform.log.error('IP connection closed. Reconnecting in 10s...');
-                setTimeout(() => setupConnection(), 10000);
+                if (platform._shutting_down) {
+                    return;
+                }
+                platform.log.error(`IP connection closed. Reconnecting in ${RECONNECT_DELAY_MS / 1000}s...`);
+                platform._scheduleReconnect(setupConnection);
             });
 
             connection.on('end', () => platform.log.log('IP connection ended'));
@@ -367,33 +482,40 @@ class TexecomPlatform {
             platform.texecomConnection = connection;
         }
 
-        // ── Connect via serial or IP ─────────────────────────────────────────
-        if (this.serial_device) {
-            // serialport v12: baudRate (camelCase) + separate ReadlineParser
-            const { SerialPort } = require('serialport');
-            const { ReadlineParser } = require('@serialport/parser-readline');
+        // ── Serial connection with auto-reconnect ────────────────────────────
+        // An adapter missing at start-up, or unplugged later, is tried again
+        // until it is back.
+        function setupSerial() {
+            const sp = new SerialPort({ path: platform.serial_device, baudRate: platform.baud_rate, autoOpen: false });
 
-            const sp = new SerialPort({ path: this.serial_device, baudRate: this.baud_rate });
-            const parser = sp.pipe(new ReadlineParser({ delimiter: '\n' }));
+            readMessages(sp, 'Serial');
 
-            sp.on("open", () => {
+            sp.on("error", (err) => platform.log.error("Serial port error:", err.message));
+
+            sp.on("close", () => {
+                if (platform._shutting_down) {
+                    return;
+                }
+                platform.log.error(`Serial port closed. Reopening in ${RECONNECT_DELAY_MS / 1000}s...`);
+                platform._scheduleReconnect(setupSerial);
+            });
+
+            sp.open((err) => {
+                if (err) {
+                    platform.log.error(`Could not open serial port ${platform.serial_device}: ${err.message}. Trying again in ${RECONNECT_DELAY_MS / 1000}s...`);
+                    platform._scheduleReconnect(setupSerial);
+                    return;
+                }
                 platform.log.log("Serial port opened");
                 platform._panelConnected();
             });
-            sp.on("error", (err) => platform.log.error("Serial port error:", err.message));
-
-            // The parser splits on 0x0A, which the panel clock reply can carry
-            // inside it - the 10th of a month, or ten minutes past. Reading the
-            // clock works off the bytes as they arrive instead.
-            sp.on('data', (data) => responseEmitter.emit('raw', data));
-
-            parser.on('data', function (data) {
-                platform.log.debug(`Serial data received: ${data}`);
-                responseEmitter.emit('data', data);
-                processData(data);
-            });
 
             platform.texecomConnection = sp;
+        }
+
+        // ── Connect via serial or IP ─────────────────────────────────────────
+        if (this.serial_device) {
+            setupSerial();
 
         } else if (this.ip_address) {
             setupConnection();
@@ -462,12 +584,13 @@ class TexecomPlatform {
         }
 
         this._clock_sync_running = true;
+        const time_zone = this.time_zone;
 
-        return writeCommandAndWaitForOK(connection, `W${this.udl}`)
-            .then(() => readPanelTime(connection))
+        return exclusive(() => writeCommandAndWaitForOK(connection, `W${this.udl}`)
+            .then(() => readPanelTime(connection)))
             .then(panel => {
                 const now = new Date();
-                const drift = clockDriftMinutes(panel, now);
+                const drift = clockDriftMinutes(panel, now, time_zone);
 
                 platform._clock_sync_failing = false;
 
@@ -476,19 +599,32 @@ class TexecomPlatform {
                     return;
                 }
 
-                if (shouldDeferClockSet(now)) {
+                // Homebridge in Docker runs on UTC unless told otherwise, while
+                // the panel keeps local time, so a clock out by whole hours is
+                // far more likely to be this machine than the panel. Setting it
+                // would put the panel an hour out every summer.
+                if (!time_zone && machineIsOnUtc() && isWholeHours(drift)) {
+                    if (!platform._clock_zone_warned) {
+                        platform._clock_zone_warned = true;
+                        platform.log.warn(`Panel clock reads ${formatPanelTime(panel)}, ${describeDrift(drift)}, but this machine is on UTC so the difference is probably the time zone. Leaving the panel clock alone. Set the panel's time zone in the plugin settings (time_zone) to have it corrected.`);
+                    }
+                    return;
+                }
+
+                if (shouldDeferClockSet(now, time_zone)) {
                     platform.log.debug(`Panel clock is ${describeDrift(drift)}, waiting a minute to set it: 47 minutes past would put a framing character inside the command`);
                     scheduleAfter(61000, () => platform._syncPanelClock());
                     return;
                 }
 
-                platform.log.log(`Panel clock reads ${formatPanelTime(panel)}, ${describeDrift(drift)}. Setting it to ${formatPanelTime(localPanelTime(now))}`);
+                platform.log.log(`Panel clock reads ${formatPanelTime(panel)}, ${describeDrift(drift)}. Setting it to ${formatPanelTime(localPanelTime(now, time_zone))}`);
 
                 // Logging in again rather than leaning on the session opened for
                 // the read, which is what the panel asks for and costs one
-                // command at most once an interval.
-                return writeCommandAndWaitForOK(connection, `W${platform.udl}`)
-                    .then(() => writeCommandAndWaitForOK(connection, panelTimeCommand(now)))
+                // command at most once an interval. The time is taken again
+                // once it is our turn, in case something else held the panel.
+                return exclusive(() => writeCommandAndWaitForOK(connection, `W${platform.udl}`)
+                    .then(() => writeCommandAndWaitForOK(connection, panelTimeCommand(new Date(), time_zone))))
                     .then(() => platform.log.log("Panel clock set"));
             })
             .catch(err => {
@@ -615,14 +751,19 @@ function TexecomAccessory(log, config, hap, kind) {
     this.dwell_time = config["dwell"] || 0;
     this.dwell_timer = null;
 
+    // The state an area was in when Homebridge last stopped, if it is known.
+    this.restored_state = null;
+
     if (this.kind === "group") {
         // A combined area is addressed as several area numbers at once.
         this.area_numbers = (config["areas"] || []).map(Number).filter(n => !Number.isNaN(n));
         this.zone_number = this.area_numbers.join("+");
         this.zone_type = "securitysystem";
     } else {
-        this.zone_number = zpad(config["zone_number"] || config["area_number"], 3);
-        this.zone_type = config["zone_type"] || config["area_type"] || "motion";
+        this.zone_number = pad(config["zone_number"] || config["area_number"], 3);
+        // An area is always a security system, whether or not the config says
+        // so; area_type has only ever had the one value.
+        this.zone_type = this.kind === "area" ? "securitysystem" : (config["zone_type"] || "motion");
         this.area_numbers = this.zone_type === "securitysystem" ? [Number(this.zone_number)] : [];
     }
 
@@ -634,13 +775,15 @@ function TexecomAccessory(log, config, hap, kind) {
     // other than us, so we have nothing to go on.
     this.pending_target_state = null;
 
-    try {
-        if (Array.isArray(config["zones"])) {
-            this.zones = config["zones"].map(zone => zpad(zone, 3));
-        } else {
-            this.zones = zpad(config["zones"], 3);
-        }
-    } catch (e) { /* no zones */ }
+    // The zones under an area, which raise an alarm in HomeKit when one goes
+    // active while the area is armed.
+    if (Array.isArray(config["zones"])) {
+        this.zones = config["zones"].map(zone => pad(zone, 3));
+    } else if (config["zones"] !== null && config["zones"] !== undefined && config["zones"] !== "") {
+        this.zones = [pad(config["zones"], 3)];
+    } else {
+        this.zones = [];
+    }
 
     // What 4.3.0 computed, kept so that an install carried over from 4.3.0
     // can be handed back the very same accessory identities. 4.3.0 hashed the
@@ -680,7 +823,7 @@ TexecomAccessory.prototype = {
 
         hapAccessory.getService(Service.AccessoryInformation)
             .setCharacteristic(Characteristic.Name, this.name)
-            .setCharacteristic(Characteristic.Manufacturer, "Homebridge")
+            .setCharacteristic(Characteristic.Manufacturer, "Texecom")
             .setCharacteristic(Characteristic.Model, `Texecom ${MODELS[this.kind] || "Zone"}`)
             .setCharacteristic(Characteristic.SerialNumber, serialNumber || this.sn);
 
@@ -754,12 +897,30 @@ TexecomAccessory.prototype = {
                     }
                     service.getCharacteristic(Characteristic.SecuritySystemCurrentState).updateValue(newState);
                     me.log.debug(`Set target state ${targetState} and current state ${newState}`);
+
+                    // Kept with the accessory in the Homebridge cache, so a
+                    // restart can carry on from here.
+                    hapAccessory.context.texecom_state = newState;
                 };
 
-                // Safe default on startup
-                changeAction(Characteristic.SecuritySystemCurrentState.DISARMED);
+                // Carry on from the state saved before Homebridge restarted.
+                // With nothing saved, disarmed is the safe guess.
+                if (isCurrentState(Characteristic, hapAccessory.context.texecom_state)) {
+                    this.restored_state = hapAccessory.context.texecom_state;
+                    me.log.debug(`Restoring ${me.name} to state ${this.restored_state}`);
+                    changeAction(this.restored_state);
+                } else {
+                    changeAction(Characteristic.SecuritySystemCurrentState.DISARMED);
+                }
 
                 var area = this;
+                const hap = this.hap;
+
+                // HomeKit expects a HAP status when a set fails, which the Home
+                // app shows as "No Response" rather than a generic error.
+                const failure = () => hap.HapStatusError
+                    ? new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE)
+                    : new Error("Command failed");
 
                 service.getCharacteristic(Characteristic.SecuritySystemTargetState)
                     .onSet(function (value) {
@@ -768,10 +929,10 @@ TexecomAccessory.prototype = {
                             const platform = me._platform;
                             if (platform && platform.udl != null) {
                                 areaTargetSecurityStateSet(platform, area, service, value,
-                                    (err) => err ? reject(err) : resolve());
+                                    (err) => err ? reject(failure()) : resolve());
                             } else {
-                                me.log.debug("No UDL configured. Add UDL to enable arm/disarm from HomeKit.");
-                                reject(new Error("No UDL configured"));
+                                me.log.error("No UDL configured. Add the UDL to the config to arm and disarm from HomeKit.");
+                                reject(failure());
                             }
                         });
                     });
@@ -787,10 +948,18 @@ TexecomAccessory.prototype = {
         this.changeHandler = function (status, user) {
             const newState = status;
             me.log.debug(`Dwell = ${me.dwell_time}`);
+            // Only the latest change counts. A timer left over from an earlier
+            // one would otherwise clear a zone that has gone active again.
+            if (me.dwell_timer) {
+                clearTimeout(me.dwell_timer);
+                me.dwell_timer = null;
+            }
             if (!newState && me.dwell_time > 0) {
-                me.dwell_timer = setTimeout(() => changeAction(newState), me.dwell_time);
+                me.dwell_timer = setTimeout(() => {
+                    me.dwell_timer = null;
+                    changeAction(newState);
+                }, me.dwell_time);
             } else {
-                if (me.dwell_timer) clearTimeout(me.dwell_timer);
                 changeAction(newState);
             }
 
@@ -839,8 +1008,11 @@ function areaTargetSecurityStateSet(platform, accessory, service, value, callbac
     // to ignore the first write and answer the resend, so a command sent only
     // once can be swallowed. Arming an already armed area is a no-op, so a
     // duplicate is harmless.
-    writeCommandAndWaitForOK(platform.texecomConnection, `W${platform.udl}`)
-        .then(() => writeCommandAndWaitForOK(platform.texecomConnection, command))
+    //
+    // The login and the command go together, with nothing else sent in
+    // between, so that the OK each waits for is its own.
+    exclusive(() => writeCommandAndWaitForOK(platform.texecomConnection, `W${platform.udl}`)
+        .then(() => writeCommandAndWaitForOK(platform.texecomConnection, command)))
         .then(() => {
             // OK response from alarm is only indication that the target state has been reached
             const currentState = targetToCurrentState(Characteristic, value);
@@ -876,12 +1048,24 @@ function areaTargetSecurityStateSet(platform, accessory, service, value, callbac
             callback();
         })
         .catch(err => {
-            platform.log.debug(`Command error: ${err}`);
+            platform.log.error(`Could not send the command to area ${accessory.zone_number}: ${err.message}`);
             callback(err);
         });
 }
 
 // ─── Command writer ───────────────────────────────────────────────────────────
+// The panel answers every command with a bare OK, so two sequences sent at
+// once - a scene arming two areas, or an arm while the clock is checked -
+// could each take the other's OK as its own. Each sequence waits for the one
+// before it to finish.
+var commandChain = Promise.resolve();
+
+function exclusive(task) {
+    const run = commandChain.then(task);
+    commandChain = run.catch(() => { });
+    return run;
+}
+
 function writeCommandAndWaitForOK(connection, command, retryCount = 1) {
     return new Promise((resolve, reject) => {
         function settle(fn, arg) {
@@ -908,7 +1092,7 @@ function writeCommandAndWaitForOK(connection, command, retryCount = 1) {
             } else {
                 reject(new Error("Timeout after retries"));
             }
-        }, 2000);
+        }, COMMAND_TIMEOUT_MS);
 
         connection.write(frameCommand(command), function (err) {
             if (err) {
@@ -936,6 +1120,15 @@ function areaMask(area_numbers) {
 
 function is_armed(area_number) {
     return areas_armed.some(v => v === area_number);
+}
+
+// A number as text, padded with leading zeros to the width given.
+function pad(value, width) {
+    return String(value).padStart(width, "0");
+}
+
+function isCurrentState(Characteristic, value) {
+    return Object.values(Characteristic.SecuritySystemCurrentState).includes(value);
 }
 
 function toBuffer(data) {
@@ -1100,32 +1293,80 @@ function isPlausiblePanelTime(time) {
         && time.minutes <= 59;
 }
 
-// The panel carries a two digit year, so it is read against the century we are
-// in. A panel that has lost its clock altogether reads as wildly out and is set.
-function panelTimeToDate(time, now) {
-    const century = Math.floor(now.getFullYear() / 100) * 100;
-    return new Date(century + time.year, time.month - 1, time.day, time.hours, time.minutes, 0, 0);
+// A time zone name such as Europe/London, or null to use this machine's.
+function parseTimeZone(value, log) {
+    if (value === null || value === undefined || String(value).trim() === "") {
+        return null;
+    }
+    const time_zone = String(value).trim();
+    try {
+        new Intl.DateTimeFormat("en-GB", { timeZone: time_zone });
+        return time_zone;
+    } catch (e) {
+        log.error(`Unknown time zone "${time_zone}", using this machine's time zone for the panel clock instead. Use a name such as Europe/London.`);
+        return null;
+    }
 }
 
-function localPanelTime(now) {
+function machineIsOnUtc() {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return ["UTC", "Etc/UTC", "Etc/GMT", "GMT", "Etc/Universal", "Universal", "Etc/Zulu", "Zulu"].includes(zone)
+        && new Date().getTimezoneOffset() === 0;
+}
+
+// A difference of whole hours, give or take the minute the clock can be out by
+// anyway, up to the 14 hours time zones are ever apart.
+function isWholeHours(minutes) {
+    const size = Math.abs(minutes);
+    const off = size % 60;
+    return size >= 60 - CLOCK_TOLERANCE_MINUTES && size <= 14 * 60 + CLOCK_TOLERANCE_MINUTES
+        && (off <= CLOCK_TOLERANCE_MINUTES || off >= 60 - CLOCK_TOLERANCE_MINUTES);
+}
+
+// The time on the wall in the panel's time zone, or this machine's when none is
+// set, with the two digit year the panel keeps.
+function localPanelTime(now, time_zone) {
+    if (!time_zone) {
+        return {
+            day: now.getDate(),
+            month: now.getMonth() + 1,
+            year: now.getFullYear() % 100,
+            hours: now.getHours(),
+            minutes: now.getMinutes()
+        };
+    }
+
+    const parts = {};
+    new Intl.DateTimeFormat("en-GB", {
+        timeZone: time_zone, hourCycle: "h23",
+        year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric"
+    }).formatToParts(now).forEach(p => { parts[p.type] = Number(p.value); });
+
     return {
-        day: now.getDate(),
-        month: now.getMonth() + 1,
-        year: now.getFullYear() % 100,
-        hours: now.getHours(),
-        minutes: now.getMinutes()
+        day: parts.day,
+        month: parts.month,
+        year: parts.year % 100,
+        hours: parts.hour,
+        minutes: parts.minute
     };
 }
 
+// A panel time as minutes on a plain count, with no time zone involved, so two
+// wall clock times can be compared. The panel carries a two digit year, so it
+// is read against the century we are in. A panel that has lost its clock
+// altogether reads as wildly out and is set.
+function panelTimeToMinutes(time, now) {
+    const century = Math.floor(now.getFullYear() / 100) * 100;
+    return Date.UTC(century + time.year, time.month - 1, time.day, time.hours, time.minutes) / 60000;
+}
+
 // How far the panel is ahead of us, in whole minutes. Negative means behind.
-function clockDriftMinutes(time, now) {
-    const panel = panelTimeToDate(time, now);
-    const local = new Date(now.getFullYear(), now.getMonth(), now.getDate(), now.getHours(), now.getMinutes(), 0, 0);
-    return Math.round((panel.getTime() - local.getTime()) / 60000);
+function clockDriftMinutes(time, now, time_zone) {
+    return Math.round(panelTimeToMinutes(time, now) - panelTimeToMinutes(localPanelTime(now, time_zone), now));
 }
 
 function formatPanelTime(time) {
-    return `${zpad(time.day, 2)}/${zpad(time.month, 2)}/${zpad(time.year, 2)} ${zpad(time.hours, 2)}:${zpad(time.minutes, 2)}`;
+    return `${pad(time.day, 2)}/${pad(time.month, 2)}/${pad(time.year, 2)} ${pad(time.hours, 2)}:${pad(time.minutes, 2)}`;
 }
 
 function describeDrift(minutes) {
@@ -1139,8 +1380,8 @@ function describeDrift(minutes) {
 
 // Day, month, two digit year, hours and minutes as raw bytes, all of which are
 // below 0x80 so they survive being written out.
-function panelTimeCommand(now) {
-    const time = localPanelTime(now);
+function panelTimeCommand(now, time_zone) {
+    const time = localPanelTime(now, time_zone);
     return Buffer.from([0x54, time.day, time.month, time.year, time.hours, time.minutes]);
 }
 
@@ -1151,6 +1392,6 @@ function panelTimeCommand(now) {
 // from here. Of the five, only the minutes can land on one - 47 minutes past -
 // and a minute's wait clears it. The year can too, in 2047 and 2092, and waiting
 // cannot help with that, so the command goes as it is.
-function shouldDeferClockSet(now) {
-    return localPanelTime(now).minutes === 0x2F;
+function shouldDeferClockSet(now, time_zone) {
+    return localPanelTime(now, time_zone).minutes === 0x2F;
 }

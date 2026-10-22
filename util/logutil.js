@@ -1,35 +1,31 @@
+// A thin layer over the Homebridge logger, which already stamps the time and
+// the platform name on every line. Errors and warnings are always shown, debug
+// lines only when the plugin's own debug option is on, in which case they are
+// written as ordinary lines so they show without running Homebridge in debug.
 class LogUtil {
-    constructor(isDebug = false,prefix='',log) {
-        this.log=log;
+    constructor(isDebug = false, prefix = '', log) {
         this.isDebug = isDebug;
         this.prefix = prefix;
-    }
-
-    getCurrentTimestamp() {
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0'); // Month is 0-based
-        const day = String(now.getDate()).padStart(2, '0');
-        const hours = String(now.getHours()).padStart(2, '0');
-        const minutes = String(now.getMinutes()).padStart(2, '0');
-        const seconds = String(now.getSeconds()).padStart(2, '0');
-        
-        return `[${year}/${month}/${day}, ${hours}:${minutes}:${seconds}]`;
+        this.hbLog = log;
     }
 
     log(...args) {
-        console.log(this.getCurrentTimestamp(), `[${this.prefix}]`, ...args);
+        this.hbLog.info(...args);
+    }
+
+    warn(...args) {
+        this.hbLog.warn(...args);
+    }
+
+    error(...args) {
+        this.hbLog.error(...args);
     }
 
     debug(...args) {
         if (this.isDebug) {
-            console.log(this.getCurrentTimestamp(), `[${this.prefix}[DEBUG]]`, ...args);
-        }
-    }
-
-    error(...args) {
-        if (this.isDebug) {
-            console.log(this.getCurrentTimestamp(), `[${this.prefix}[ERROR]]`, ...args);
+            this.hbLog.info(...args);
+        } else {
+            this.hbLog.debug(...args);
         }
     }
 }

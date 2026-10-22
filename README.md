@@ -31,7 +31,7 @@ Example:
         "platform": "Texecom",
         "serial_device": "/dev/ttyUSB0",
         "baud_rate": 19200,
-        "udl":1234,
+        "udl": "1234",
         "zones": [
             {
                 "name": "Living Room",
@@ -94,7 +94,7 @@ For UDL
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `udl` | 1234 | The UDL code on the panel to be able to arm and disarm alarm |
+| `udl` | N/A | The UDL code on the panel to be able to arm and disarm alarm, e.g. `"1234"`. Give it in quotes if it starts with a 0. |
 
 For arm state reporting
 
@@ -115,6 +115,7 @@ The panel keeps its own clock, and nothing corrects it once it drifts apart from
 | Key | Default | Description |
 | --- | --- | --- |
 | `time_sync_interval` | 0 | How often to check the panel clock, in hours. `1` checks every hour, `24` once a day, `744` once every 31 days, and anything in between works. `0` turns it off and leaves the panel clock alone. |
+| `time_zone` | This machine's | The time zone the panel keeps its clock in, e.g. `Europe/London`. Only needed when the machine running Homebridge is not set to the panel's time zone, which is usual in Docker. |
 
 ```json
 "time_sync_interval": 24
@@ -123,6 +124,8 @@ The panel keeps its own clock, and nothing corrects it once it drifts apart from
 It is off unless you set it. A UDL is needed, the same one arming uses, because the panel asks to be logged into before it will give up its clock or take a new time.
 
 The panel is checked shortly after Homebridge connects to it as well as on the interval, so a panel that lost its clock in a power cut is put right without waiting for the next check. A difference of a minute is left alone: the panel only counts whole minutes, so a check landing either side of a minute boundary can look a minute out when it is really in step. Anything beyond that is set. The panel carries a two digit year, so it is read as being in this century.
+
+Homebridge in Docker runs on UTC unless `TZ` is set, while the panel keeps local time. Set `time_zone` in that case. Without it, a panel that looks a whole number of hours out from a machine on UTC is left alone with a warning, rather than being set an hour wrong every summer.
 
 Once a day is plenty for a panel that keeps reasonable time. Checking every hour is there for a panel that drifts badly, and costs two short commands each time.
 
@@ -189,7 +192,7 @@ This plugin is a platform plugin so you must configure each zone from your Texec
 | --- | --- | --- |
 | `name` | N/A | The name of the sensor as it will appear in HomeKit. |
 | `area_number` | N/A | The area number from Texecom, usually 1. |
-| `area_type` | `"securitysystem"` | The type of area; only securitysystem is supported. |
+| `area_type` | `"securitysystem"` | The type of area; only securitysystem is supported, and an area is always one. |
 | `dwell` | 0 |  |
 | `zones` | N/A | Add all the zone numbers to the area to be able to trigger alarm and the corresponding area |
 

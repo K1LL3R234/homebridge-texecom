@@ -2,7 +2,7 @@
     "title": "Texecom",
     "pluginAlias": "Texecom",
     "pluginType": "platform",
-    "headerDisplay": "Official Texecom Homebridge plugin.",
+    "headerDisplay": "Homebridge plugin for Texecom Premier Elite alarm panels.",
     "singular": true,
     "schema": {
         "type": "object",
@@ -41,18 +41,23 @@
                 "title": "Baud Rate"
             },
             "udl": {
-                "type": "integer",
-                "minLength": 4,
-                "maxLength": 6,
-                "title": "UDL"
+                "type": "string",
+                "pattern": "^[0-9]{4,8}$",
+                "title": "UDL",
+                "description": "The UDL code on the panel. Needed to arm and disarm from HomeKit, and for the panel clock sync."
             },
             "time_sync_interval": {
                 "type": "integer",
                 "default": 0,
                 "minimum": 0,
-                "maximum": 744,
                 "title": "Panel Clock Sync (hours)",
                 "description": "How often to check the panel clock against the clock on this machine, in hours, and set it if it has drifted. 1 checks every hour, 24 once a day, 744 once every 31 days. 0 turns it off and leaves the panel clock alone. Needs a UDL."
+            },
+            "time_zone": {
+                "type": "string",
+                "title": "Panel Time Zone",
+                "placeholder": "Europe/London",
+                "description": "The time zone the panel keeps its clock in. Only needed when the machine running Homebridge is set to a different one, which is usual in Docker. Leave empty to use this machine's."
             },
             "remote_users": {
                 "type": "array",
