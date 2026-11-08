@@ -74,6 +74,12 @@ class TexecomPlatform {
         // set its own. Unset offers them all.
         this.target_states = config["target_states"];
 
+        // Zones going active during the entry delay are normally left to the
+        // panel, which reports a real alarm itself. Not every panel does, so
+        // this raises the alarm in HomeKit as soon as a zone under an armed
+        // area goes active, entry delay or not, as releases before 4.4.1 did.
+        this.zone_alarm = config["zone_alarm"] === true;
+
         // How often to check the panel clock against this machine's, in hours.
         // 0 leaves the panel clock alone.
         this.time_sync_interval = parseSyncInterval(config["time_sync_interval"]);
@@ -330,7 +336,7 @@ class TexecomPlatform {
                                 if (!areaAccessories[a].zones.includes(pad(updated_zone, 3)) || !is_armed(area_number)) {
                                     continue;
                                 }
-                                if (areas_in_entry.has(Number(area_number))) {
+                                if (!platform.zone_alarm && areas_in_entry.has(Number(area_number))) {
                                     platform.log.debug(`Zone ${updated_zone} active during the entry delay for area ${area_number}, leaving it to the panel`);
                                     continue;
                                 }

@@ -124,6 +124,20 @@ Night and Home both send the panel a part arm, so offering only the modes your p
 
 If the Home app still shows the old buttons after a change, close and reopen it. Some versions of iOS hold on to them for an accessory they already know.
 
+### Zone Alarms
+
+A zone listed under an armed area's `zones` raises the alarm in HomeKit when it goes active. During the panel's entry delay, walking in to disarm, it is left to the panel, which reports a real alarm itself once the delay runs out. Some panels never send that report, so the alarm never reaches HomeKit.
+
+| Key | Default | Description |
+| --- | --- | --- |
+| `zone_alarm` | `false` | Raise the alarm as soon as a zone under an armed area goes active, entry delay or not, as releases before 4.4.1 did. |
+
+```json
+"zone_alarm": true
+```
+
+The trade-off is an alarm in HomeKit every time you walk in through the entry route before disarming. Only the zones listed under the area count.
+
 ### Panel Clock
 
 The panel keeps its own clock, and nothing corrects it once it drifts apart from an engineer at the keypad. This checks it against the clock on the machine running Homebridge and sets it when the two have come apart.

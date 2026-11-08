@@ -98,6 +98,12 @@
                     "enum": ["away", "home", "night", "off"]
                 }
             },
+            "zone_alarm": {
+                "type": "boolean",
+                "title": "Alarm When A Zone Triggers",
+                "default": false,
+                "description": "Raise the alarm in HomeKit as soon as a zone listed under an armed area goes active, even during the entry delay, as releases before 4.4.1 did. Turn this on if your panel does not report its own alarms. Expect an alarm notification when you walk in to disarm."
+            },
             "zones": {
                 "type": "array",
                 "title": "Zones",
