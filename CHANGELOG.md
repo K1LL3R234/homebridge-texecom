@@ -2,6 +2,10 @@
 
 This change log documents all release versions of homebridge-texecom
 
+### 4.4.1-beta.2 (2026-11-08)
+
+- **FEATURE** - `zone_alarm` raises the alarm in HomeKit as soon as a zone under an armed area goes active, even during the entry delay, as releases before 4.4.1 did. For panels that do not report their own alarm, which since 4.4.1-beta.0 meant an alarm during the entry delay never reached HomeKit. Off by default.
+
 ### 4.4.1-beta.1 (2026-10-22)
 
 - **FEATURE** - `target_states` chooses which arm modes the Home app offers, e.g. `["away", "off"]` for a household that only arms fully, which also lets "Hey Siri, turn on the alarm" go straight to Away (#30). Set it for every area, or on an area or combined area for that one alone. Off is always offered. An arm in a mode that is not offered, at the keypad say, shows as Away, or as the armed mode that is offered.
